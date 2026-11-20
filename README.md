@@ -8,6 +8,17 @@
 
 Делаем конструктор проверок безопасности для учебных проектов на Kotlin, Spring Boot и Gradle Kotlin DSL. В редакторе можно собрать сценарий из нод, сохранить его, запустить поиск секретов, SCA и SAST и скачать схему в JSON. В отчёте видны статусы нод, критичность, файл и строка каждой находки.
 
+### Статус проекта
+
+Обновлено 20 ноября 2026.
+
+- Работают ручной запуск, три анализатора, условие по критичности, отчёт, AI-рекомендации и чат по отчёту.
+- AI показывает этапы работы и группирует рекомендации. Топ действий считается по критичности, а CVE для разных версий одной библиотеки идут в отдельные карточки.
+- Webhook отправляет находки и AI-рекомендации из активной ветки. Доставка проверена в Edge на локальном HTTP-приёмнике с 15 находками из учебного архива.
+- До сдачи остаются расписание, дополнительные условия и экспорт находок в формате организаторов. Переключение моделей в редакторе описано в [AI_TASKS.md](AI_TASKS.md).
+
+После каждого крупного изменения обновляйте этот блок в том же коммите. Запишите, что заработало, как это проверили и что осталось. Так другой чат или участник команды сможет продолжить с актуального состояния.
+
 ### Локальный запуск
 
 Установите Python 3.12 и запустите Docker. Из корня проекта выполните [команды запуска](#launch) в PowerShell. Первый терминал поднимает PostgreSQL 17 и FastAPI, второй раздаёт статический фронтенд. Откройте [редактор](http://127.0.0.1:5173) или [Swagger UI](http://127.0.0.1:8000/docs).
@@ -24,7 +35,7 @@
 
 Для полной проверки загрузите учебный архив организаторов со справочником `vulnerability-database/vulnerabilities.json`. Добавьте из каталога «Анализ зависимостей» (SCA) и «Статический анализ» (SAST) и соедините их с остальным графом. SCA берёт версии из Gradle, отдаёт приоритет `gradle.lockfile` и сверяет версии с офлайн-справочником Maven. Если вы загружаете только исходники, задайте путь к справочнику через `CYBER_GARDEN_ADVISORIES` перед запуском API. SAST проверяет Kotlin по базовым правилам для SQL, TLS, CORS и прав доступа. Находки SAST требуют проверки по контексту.
 
-Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке, расписание и уведомления ещё в работе. Черновики принимают все типы нод, а попытка запустить неподключённую ноду вернёт `422 unsupported_node`.
+Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке и запуск по расписанию ещё в работе.
 
 При разработке сверяйте изменения API с фронтендом и проверяйте их на синтетических данных. Анализаторы сами ищут проблемы. LLM будет объяснять уже найденное. Ключи и токены хранятся на бэкенде.
 
@@ -34,9 +45,24 @@
 
 После завершения проверки можно задать вопрос справа. Чат использует до 15 наиболее серьёзных находок и последние сообщения по этому запуску. Для чата достаточно готового отчёта и настроенной модели, нода «AI-рекомендации» нужна для автоматического резюме.
 
+### Уведомления
+
+Настройте [получателя HTTP webhook](#webhook) перед запуском API. В редакторе добавьте «Уведомление», выберите получателя и подключите ноду к выходу «да» после условия. Например, отправляйте отчёт, только если есть высокие или критические находки. Получатель получит данные из активной ветки.
+
 ## English
 
 We're building a security workflow editor for training projects that use Kotlin, Spring Boot, and Gradle Kotlin DSL. You can build and save a workflow, run secret detection, SCA and SAST, and download the workflow as JSON. Reports show node status, severity, and the file and line for each finding.
+
+### Project status
+
+Updated November 20, 2026.
+
+- Manual runs, all three scanners, severity branching, reports, AI recommendations, and report chat work.
+- The AI panel shows processing stages and groups recommendations. Priorities are ranked by severity, and CVEs for different versions of the same dependency get separate cards.
+- The webhook sends findings and AI recommendations from the active branch. Delivery was tested in Edge with a local HTTP receiver and 15 findings from the training archive.
+- Scheduled runs, additional conditions, and exporting findings in the organizers' format are still pending. The model switcher is described in [AI_TASKS.md](AI_TASKS.md) (in Russian).
+
+Update this section in the same commit as each major change. Record what works, how it was verified, and what remains so the next chat or teammate can pick up from here.
 
 ### Run locally
 
@@ -54,7 +80,7 @@ To call the API directly, use the [requests and sample graph](#workflow-api). To
 
 For a full scan, upload the organizers' training archive with `vulnerability-database/vulnerabilities.json`. Add **Анализ зависимостей** (SCA) and **Статический анализ** (SAST) from the catalog and connect them to the graph. SCA reads Gradle dependency versions, prefers `gradle.lockfile`, and checks versions against the offline Maven catalog. For a ZIP with source files only, set `CYBER_GARDEN_ADVISORIES` to the catalog path before starting the API. SAST checks Kotlin with basic rules for SQL, TLS, CORS and authorization. Review SAST findings in context.
 
-The prototype uses one local workspace. Accounts, repository URL uploads, schedules, and notifications are still in progress. You can save any node type in a draft. Running a workflow with a node that isn't implemented returns `422 unsupported_node`.
+The prototype uses one local workspace. Accounts, repository URL uploads, and scheduled runs are still in progress.
 
 Coordinate API changes with the frontend and test them with synthetic data. The scanners find issues. The LLM will explain those findings. Keep API keys and tokens on the backend.
 
@@ -63,6 +89,10 @@ Coordinate API changes with the frontend and test them with synthetic data. The 
 The provider client lives in `backend/llm.py`. The AI node calls `load_llm().complete(messages, json_mode=True)` with its own prompt and validates the response structure. Choose [Ollama or DeepSeek](#llm-setup) in the terminal that starts FastAPI. If the provider is unavailable, the client raises `LlmError` with an error code.
 
 Ask a question in the right panel after a scan finishes. Chat uses up to 15 of the most severe findings and recent messages from that run. A finished report and a configured model are enough for chat. Add the AI node to generate an automatic summary.
+
+### Notifications
+
+Configure an [HTTP webhook recipient](#webhook) before starting the API. In the editor, add **Уведомление** (Notification), select the recipient, and connect the node to the condition's **да** (Yes) output. For example, send the report only when there are high or critical findings. The recipient gets data from the active branch.
 
 ## Launch
 
@@ -100,6 +130,7 @@ Compress-Archive -Path .data\training-sample\application.properties -Destination
 | `POST /workflows/{workflowId}/runs` | `{"sourceId":"..."}` → `202`, `runId` |
 | `GET /runs/{runId}` | Проверяйте статус до / poll until `succeeded` or `failed` |
 | `POST /runs/{runId}/chat` | `{"question":"...","history":[]}` → `{"answer":"..."}` |
+| `GET /webhooks` | Список имён получателей / list of recipient names |
 
 Схемы запросов и ответов / Request and response schemas — [OpenAPI JSON](http://127.0.0.1:8000/openapi.json). Ошибки / Errors — `{code, message}`.
 
@@ -140,6 +171,18 @@ $env:DATABASE_URL = 'postgresql://USER:PASSWORD@HOST:5432/DBNAME'
 
 Исходный файл SQLite открывается только для чтения. / The SQLite source file is opened read-only.
 
+## Webhook
+
+Настройте адрес получателя в окружении FastAPI. Адрес ниже — пример локального приёмника, замените его адресом своего сервиса, принимающего HTTP POST с JSON. / Configure the recipient URL in the FastAPI environment. Replace the local example below with a service that accepts HTTP POST with JSON.
+
+```powershell
+$env:CYBER_GARDEN_WEBHOOKS = '{"demo":"http://127.0.0.1:9000/report"}'
+```
+
+Нода хранит имя `config.webhookRef`, в примере это `demo`. Запрос содержит `runId`, `workflowId`, `nodeId`, `findings` и `aiAnalyses` с указанием ID AI-ноды. HTTP 2xx отмечается как доставка. При ошибке нода показывает причину, а отчёт с находками остаётся доступен.
+
+The node stores the recipient name in `config.webhookRef` (`demo` above). The request contains `runId`, `workflowId`, `nodeId`, `findings`, and `aiAnalyses` tagged with their AI node IDs. HTTP 2xx marks delivery as successful. On delivery failure, the node shows the reason and the findings remain in the report.
+
 ## LLM setup
 
 Локальная модель в Ollama / Local model served by Ollama:
@@ -175,7 +218,7 @@ answer = load_llm().complete(messages, json_mode=True)
 
 ### AI-нода / AI node
 
-Нода `ai` (`backend/ai.py`) группирует входящие находки по общему исправлению: одна зависимость со всеми её CVE или одно правило SAST/secrets. Модели уходят до 15 самых критичных групп со ссылками `G1`, `G2`… Она возвращает итог в 1–2 предложениях, до трёх приоритетных действий и по карточке на группу: название, действие и объяснение. Карточки с неизвестными ссылками отбрасываются, а критичность, число находок и файлов в обосновании считает сервер по отчёту. Рядом остаются `recommendations` по каждой находке, как в контракте. При сломанном JSON делается один повтор. Пока нода работает, `output.stage` проходит этапы `preparing` → `waiting` → `validating` → `done`, редактор показывает их в AI-панели. Если модель недоступна, нода завершается со статусом `succeeded`, `output.aiAvailable = false` и причиной в `error`, а находки идут дальше по графу. / The `ai` node groups incoming findings by shared fix and sends up to 15 of the most severe groups to the model. It returns a short summary, up to three priorities, and one card per group; `recommendations` per finding are kept for the contract. While it runs, `output.stage` moves through `preparing`, `waiting`, `validating`, and `done`. If the model is unavailable, the node still succeeds with `output.aiAvailable = false` and the findings continue through the graph.
+Нода `ai` (`backend/ai.py`) группирует входящие находки по общему исправлению: одна версия зависимости со всеми её CVE или одно правило SAST/secrets. Модели уходят до 15 самых критичных групп со ссылками `G1`, `G2`… Она возвращает итог в 1–2 предложениях, до трёх приоритетных действий и по карточке на группу: название, действие и объяснение. Карточки с неизвестными ссылками отбрасываются, а критичность, число находок и файлов в обосновании считает сервер по отчёту. Рядом остаются `recommendations` по каждой находке, как в контракте. При сломанном JSON делается один повтор. Пока нода работает, `output.stage` проходит этапы `preparing` → `waiting` → `validating` → `done`, редактор показывает их в AI-панели. Если модель недоступна, нода завершается со статусом `succeeded`, `output.aiAvailable = false` и причиной в `error`, а находки идут дальше по графу. / The `ai` node groups findings by dependency and version or by scanner rule, then sends up to 15 of the most severe groups to the model. It returns a short summary, up to three priorities, and one card per group; `recommendations` per finding are kept for the contract. While it runs, `output.stage` moves through `preparing`, `waiting`, `validating`, and `done`. If the model is unavailable, the node still succeeds with `output.aiAvailable = false` and the findings continue through the graph.
 
 Тесты / Tests:
 

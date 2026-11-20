@@ -223,7 +223,7 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 <div class="ov" id="ovSet"><div class="modal">
   <h2>Настройки</h2><p class="note">Адрес бэкенда. Страницу нужно открывать с http://localhost:5173 или :3000, иначе бэкенд отклонит запросы (CORS).</p>
   <label class="f">Адрес API</label><input type="text" id="apiUrl" placeholder="http://127.0.0.1:8000">
-  <p class="note">DeepSeek и локальная модель настраиваются в окружении бэкенда. Настройки webhook появятся позже.</p>
+  <p class="note">Модели и адреса webhook настраиваются на бэкенде. Получатель выбирается в ноде «Уведомление».</p>
   <div class="row"><button class="btn" data-close>Закрыть</button><button class="btn pri" id="setSave">Сохранить и проверить</button></div>
 </div></div>
 
@@ -237,7 +237,7 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 <script>
 const T={trigger:{n:"Запуск",d:"Ручной запуск",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Ветвление по критичности",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
 const SCANNERS=new Set(["secrets","sca","sast"]);
-const SUPPORTED=new Set(["trigger","condition","ai",...SCANNERS]);
+const SUPPORTED=new Set(["trigger","condition","ai","notify",...SCANNERS]);
 const SEV=["low","medium","high","critical"],SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
 const REPORT_LEVELS={critical:"Критические",high:"Высокие",medium:"Средние",low:"Низкие"};
 const RULES={
@@ -262,6 +262,13 @@ const LLM_ERRORS={
   run_in_progress:"Дождитесь завершения проверки.",
   http_error:"Эта версия бэкенда не поддерживает чат по отчёту."
 };
+const WEBHOOK_ERRORS={
+  invalid_webhook_ref:"Выберите получателя в ноде «Уведомление».",
+  invalid_webhook_settings:"Проверьте CYBER_GARDEN_WEBHOOKS на бэкенде.",
+  webhook_not_configured:"Получатель удалён или не настроен на бэкенде.",
+  webhook_timeout:"Получатель webhook не ответил вовремя.",
+  webhook_connection_error:"Не удалось подключиться к получателю webhook."
+};
 const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Бэкенд пока запускает только ручной режим.",invalid_node_config:"Заполните настройки условия: нужна минимальная критичность.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
@@ -269,7 +276,7 @@ let API=ls.get("cg_api")||"http://127.0.0.1:8000";
 async function api(path,opt){let r;
   try{r=await fetch(API+path,opt)}catch(e){throw{code:"network",message:`Нет связи с бэкендом (${API}). Проверьте, что uvicorn запущен и страница открыта с http://localhost:5173 или :3000: другие адреса бэкенд не пускает (CORS).`}}
   let b=null;try{b=await r.json()}catch(e){}
-  if(!r.ok){let m=ERR[b?.code]||b?.message||"Ошибка "+r.status;
+  if(!r.ok){let m=ERR[b?.code]||WEBHOOK_ERRORS[b?.code]||b?.message||"Ошибка "+r.status;
     if(b?.code==="unsupported_node"){const t=/The (\w+) node/.exec(b.message||"")?.[1];m=`Нода «${T[t]?.n||t}» пока не выполняется бэкендом. Уберите её из сценария, чтобы запустить.`}
     throw{code:b?.code||"http_"+r.status,message:m}}
   return b}
@@ -326,6 +333,18 @@ bd.addEventListener("pointerdown",ev=>{
 addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
 function clearReport(){report=null;pick=null;render();renderRep();renderAI()}
 function del(){if(!sel||running)return;if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
+let webhookRefs=[],webhookListError="";
+function webhookInspector(selected){
+  const refs=webhookRefs.map(ref=>`<option value="${esc(ref)}">${esc(ref)}</option>`).join("");
+  const missing=selected&&!webhookRefs.includes(selected)
+    ?`<option value="${esc(selected)}">${esc(selected)} (нет в списке)</option>`:"";
+  const note=webhookListError||(!refs
+    ?"Добавьте получателя через CYBER_GARDEN_WEBHOOKS на бэкенде."
+    :"Получатель получит находки и AI-рекомендации с этой ветки в JSON.");
+  return `<label class="f" for="webhookRef">Получатель</label>
+    <select id="webhookRef" data-k="webhookRef"><option value="">Выберите получателя</option>${refs}${missing}</select>
+    <p class="note">${esc(note)}</p>`;
+}
 function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
   const box=document.createElement("div");box.className="insp";let h="";
   if(sel.t==="e")h=`<h3>Связь</h3><p class="note">Выбранную связь можно удалить.</p><button class="btn" id="delSel" style="margin-top:8px">Удалить связь</button>`;
@@ -336,10 +355,11 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     else if(n.type==="sca")h+=`<p class="note">Сверяет версии Gradle с Maven-справочником. Загрузите полный учебный архив со справочником или настройте справочник на бэкенде.</p>`;
     else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin-код на ошибки в SQL, настройках TLS и CORS, правилах доступа к маршрутам и записям.</p>`;
     else if(n.type==="ai")h+=`<p class="note">Объясняет находки из входящих связей и предлагает исправления. Модель выбирается на бэкенде (локальная или DeepSeek). Новых находок AI не добавляет. Если модель недоступна, находки пойдут дальше без рекомендаций.</p>`;
+    else if(n.type==="notify")h+=webhookInspector(c.webhookRef);
     else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
     h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
   box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
-  box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id);el.value=n.config[el.dataset.k]??(el.dataset.k==="minSeverity"?"high":"manual");
+  box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id);el.value=n.config[el.dataset.k]??({minSeverity:"high",mode:"manual"}[el.dataset.k]||"");
     if(el.dataset.k==="minSeverity"&&!n.config.minSeverity)n.config.minSeverity="high";
     el.disabled=running;
     el.onchange=()=>{n.config[el.dataset.k]=el.value;clearReport()}});
@@ -375,9 +395,19 @@ $("#jsonDownload").onclick=()=>{
 };
 document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>b.closest(".ov").classList.remove("open"));
 // связь с бэкендом и настройки
-async function ping(){const t=$("#apiTag");try{await api("/health");t.textContent="бэкенд на связи";t.classList.add("ok");return true}catch(e){t.textContent="нет связи с бэкендом";t.classList.remove("ok");return false}}
+async function loadWebhookRefs(){
+  const origin=API;
+  let refs=[],error="";
+  try{refs=await api("/webhooks")}
+  catch(e){error=WEBHOOK_ERRORS[e.code]||"Не удалось загрузить список получателей."}
+  if(origin!==API)return;
+  webhookRefs=Array.isArray(refs)?refs:[];
+  webhookListError=error;
+  if(sel?.t==="n"&&wf.nodes.some(n=>n.id===sel.id&&n.type==="notify"))inspector()
+}
+async function ping(){const t=$("#apiTag");try{await api("/health");t.textContent="бэкенд на связи";t.classList.add("ok");loadWebhookRefs();return true}catch(e){t.textContent="нет связи с бэкендом";t.classList.remove("ok");webhookRefs=[];webhookListError="Нет связи с бэкендом.";inspector();return false}}
 $("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open")};
-$("#setSave").onclick=async()=>{API=$("#apiUrl").value.trim().replace(/\/+$/,"")||"http://127.0.0.1:8000";ls.set("cg_api",API);$("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
+$("#setSave").onclick=async()=>{if(running)return toast("Дождитесь завершения проверки");const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||"http://127.0.0.1:8000";if(next!==API){webhookRefs=[];webhookListError="Загрузка получателей…";API=next;inspector()}ls.set("cg_api",API);$("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
 $("#theme").onclick=()=>{const d=document.documentElement,dark=d.dataset.theme?d.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;d.dataset.theme=dark?"light":"dark"};
 $("#aiToggle").onclick=()=>{
   const collapsed=$("#main").classList.toggle("aic");
@@ -408,7 +438,9 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length!==1)return"В сценарии должен быть ровно один запуск";
   if(wf.nodes.some(n=>n.type!=="trigger"&&!wf.edges.some(e=>e.target===n.id)))return"У одной из нод нет входящей связи";
   const bad=wf.nodes.filter(n=>!SUPPORTED.has(n.type));if(bad.length)return`Нода «${T[bad[0].type].n}» пока не выполняется бэкендом. Уберите её, чтобы запустить сценарий.`;
-  if(wf.nodes.some(n=>n.type==="condition"&&!n.config.minSeverity))return ERR.invalid_node_config;return null}
+  if(wf.nodes.some(n=>n.type==="condition"&&!n.config.minSeverity))return ERR.invalid_node_config;
+  if(wf.nodes.some(n=>n.type==="notify"&&!n.config.webhookRef))return WEBHOOK_ERRORS.invalid_webhook_ref;
+  return null}
 $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)return toast(err);
   if(!sourceId){$("#src").classList.add("need");return toast("Сначала загрузите проект: ZIP-архив")}
   const runSource=sourceId;
@@ -424,6 +456,11 @@ $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)ret
 function openRep(){$("#rep").classList.remove("min");$("#repToggle").textContent="Свернуть"}
 $("#repToggle").onclick=()=>{$("#rep").classList.toggle("min");$("#repToggle").textContent=$("#rep").classList.contains("min")?"Развернуть":"Свернуть"};
 function nodeNote(n,s){const o=s.output;
+  if(n.type==="notify"&&o){
+    if(o.delivered)return `<br><small>Отправлено (HTTP ${esc(o.statusCode)})</small>`;
+    const reason=WEBHOOK_ERRORS[o.errorCode]||(o.statusCode?`Получатель вернул HTTP ${o.statusCode}.`:s.error);
+    return `<br><small style="color:var(--bad)">${esc(reason)}</small>`
+  }
   if(n.type==="ai"&&o){if(o.aiAvailable===false)return`<br><small style="color:var(--bad)">${esc(LLM_ERRORS[o.errorCode]||"Модель недоступна. Находки сохранены.")}</small>`;
     if(o.aiAvailable)return`<br><small>${aiDoneText(o)}</small>`;
     const st=AI_STAGES.find(x=>x[0]===o.stage);if(st&&s.status==="running")return`<br><small>${st[1]}…</small>`}

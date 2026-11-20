@@ -17,6 +17,7 @@ from .schemas import (
 )
 from .sources import MAX_UPLOAD, validate_zip
 from .storage import Storage, database_url
+from .webhooks import WebhookError, configured_webhooks
 
 
 LOCAL_ORIGINS = [
@@ -59,6 +60,13 @@ def create_app(dsn: str | None = None) -> FastAPI:
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/webhooks")
+    def list_webhooks() -> list[str]:
+        try:
+            return sorted(configured_webhooks())
+        except WebhookError as error:
+            raise ApiProblem(503, error.code, str(error)) from None
 
     @app.post("/sources", status_code=201)
     def upload_source(file: Annotated[UploadFile, File(description="ZIP archive of an approved training project")]) -> SourceCreated:

@@ -112,7 +112,7 @@ class FindingGroup:
 
 def _group_key(finding: Finding) -> tuple:
     if finding.scanner == "sca" and finding.group and finding.artifact:
-        return ("sca", finding.group, finding.artifact)  # one dependency update closes all its CVEs
+        return ("sca", finding.group, finding.artifact, finding.version)
     return (finding.scanner, finding.ruleId)
 
 
@@ -185,6 +185,14 @@ def build_explainer_messages(groups: Sequence[FindingGroup]) -> list[ChatMessage
     return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]
 
 
+def select_priorities(cards: Sequence[AiGroup], actions: dict[str, str]) -> list[AiPriority]:
+    ranked = sorted(cards, key=lambda card: SEVERITY_ORDER[card.severity])
+    return [
+        AiPriority(groupId=card.id, action=actions.get(card.id, card.action))
+        for card in ranked[:MAX_PRIORITIES]
+    ]
+
+
 def parse_answer(content: str, groups: Sequence[FindingGroup]) -> AiAnalysis:
     """Validate the model's JSON and keep only cards for groups that were sent."""
     try:
@@ -207,18 +215,9 @@ def parse_answer(content: str, groups: Sequence[FindingGroup]) -> AiAnalysis:
         raise LlmError("invalid_response", "The model answer does not reference any finding group.")
     cards.sort(key=lambda card: int(card.id[1:]))  # same order as the report: most severe first
 
-    explained = {card.id: card for card in cards}
-    priorities: list[AiPriority] = []
+    suggested_actions = {}
     for item in answer.priorities:
-        ref = item.groupId.strip()
-        if ref in explained and all(p.groupId != ref for p in priorities):
-            priorities.append(AiPriority(groupId=ref, action=item.action))
-    priorities.sort(key=lambda p: SEVERITY_ORDER[explained[p.groupId].severity])
-    for card in cards:  # the model skipped priorities: start with the most severe cards
-        if len(priorities) >= MAX_PRIORITIES:
-            break
-        if all(p.groupId != card.id for p in priorities):
-            priorities.append(AiPriority(groupId=card.id, action=card.action))
+        suggested_actions.setdefault(item.groupId.strip(), item.action)
 
     recommendations = [
         Recommendation(findingId=finding_id, explanation=card.explanation, remediation=card.action)
@@ -226,7 +225,7 @@ def parse_answer(content: str, groups: Sequence[FindingGroup]) -> AiAnalysis:
     ]
     return AiAnalysis(
         summary=answer.summary, recommendations=recommendations,
-        priorities=priorities[:MAX_PRIORITIES], groups=cards,
+        priorities=select_priorities(cards, suggested_actions), groups=cards,
     )
 
 

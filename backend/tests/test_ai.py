@@ -64,6 +64,19 @@ class GroupingTest(unittest.TestCase):
         self.assertEqual(groups[0].severity, "critical")
         self.assertEqual(rationale(groups[0]), "Критическая критичность · 2 уязвимости в одной зависимости")
 
+    def test_dependency_versions_are_grouped_separately(self):
+        first = dependency(1, "CVE-1")
+        second = dependency(2, "CVE-2").model_copy(update={
+            "version": "2.1", "file": "other/build.gradle.kts",
+        })
+        groups = group_findings([first, second])
+        self.assertEqual([len(group.findings) for group in groups], [1, 1])
+        payload = json.loads(build_explainer_messages(groups)[1]["content"].split("\n", 1)[1])
+        self.assertEqual([item["dependency"] for item in payload], [
+            "org.yaml:snakeyaml:1.30", "org.yaml:snakeyaml:2.1",
+        ])
+        self.assertEqual([item["advisories"] for item in payload], [["CVE-1"], ["CVE-2"]])
+
     def test_same_rule_groups_and_counts_files(self):
         groups = group_findings([finding(1, file="A.kt"), finding(2, file="B.kt"), finding(3, file="B.kt")])
         self.assertEqual(len(groups), 1)
@@ -96,6 +109,14 @@ class ExplainFindingsTest(unittest.TestCase):
         findings = [finding(n, rule=f"r{n}") for n in range(1, 6)]
         analysis = explain_findings(findings, FakeClient(answer("G1", "G2", "G3", "G4")))
         self.assertEqual([p.groupId for p in analysis.priorities], ["G1", "G2", "G3"])
+
+    def test_critical_card_replaces_a_model_selected_low_priority(self):
+        findings = [finding(1, "critical", rule="critical")]
+        findings.extend(finding(n, "low", rule=f"r{n}") for n in range(2, 5))
+        analysis = explain_findings(
+            findings, FakeClient(answer("G1", "G2", "G3", "G4", priorities=("G2", "G3", "G4")))
+        )
+        self.assertEqual([item.groupId for item in analysis.priorities], ["G1", "G2", "G3"])
 
     def test_retries_once_on_broken_json(self):
         client = FakeClient("не json", answer("G1"))
@@ -145,7 +166,7 @@ class RunnerAiNodeTest(unittest.TestCase):
 
     def test_unavailable_model_keeps_run_going(self):
         with mock.patch.dict(os.environ, {"LLM_PROVIDER": ""}):
-            output, error = run_ai(self.report(), [finding(1)])
+            output, error, _ = run_ai(self.report(), [finding(1)])
         self.assertFalse(output["aiAvailable"])
         self.assertEqual(output["stage"], "failed")
         self.assertEqual(output["errorCode"], "not_configured")
@@ -155,7 +176,7 @@ class RunnerAiNodeTest(unittest.TestCase):
         report = self.report()
         published = []
         with mock.patch("backend.runner.load_llm", return_value=FakeClient(answer("G1"))):
-            output, error = run_ai(report, [finding(1)], published.append)
+            output, error, _ = run_ai(report, [finding(1)], published.append)
         self.assertIsNone(error)
         self.assertEqual(output, {"aiAvailable": True, "stage": "done", "explained": 1, "total": 1})
         self.assertEqual([item["stage"] for item in published], ["preparing", "waiting", "validating"])
@@ -170,6 +191,25 @@ class RunnerAiNodeTest(unittest.TestCase):
         self.assertEqual([group.id for group in report.aiAnalysis.groups], ["G1", "G2"])
         self.assertEqual(report.aiAnalysis.groups[1].findingIds, ["id2"])
         self.assertEqual(len({p.groupId for p in report.aiAnalysis.priorities}), len(report.aiAnalysis.priorities))
+
+    def test_merge_keeps_unique_ids_when_first_answer_has_gaps(self):
+        report = self.report()
+        first = explain_findings([finding(1), finding(2, rule="other")], FakeClient(answer("G2")))
+        second = explain_findings([finding(3, "critical")], FakeClient(answer("G1")))
+        merge_analysis(report, first)
+        merge_analysis(report, second)
+        self.assertEqual([group.id for group in report.aiAnalysis.groups], ["G2", "G3"])
+        self.assertEqual([priority.groupId for priority in report.aiAnalysis.priorities], ["G3", "G2"])
+
+    def test_later_ai_node_can_replace_an_existing_priority(self):
+        report = self.report()
+        first = explain_findings(
+            [finding(n, "low", rule=f"r{n}") for n in range(1, 4)], FakeClient(answer("G1", "G2", "G3")),
+        )
+        later = explain_findings([finding(4, "critical")], FakeClient(answer("G1")))
+        merge_analysis(report, first)
+        merge_analysis(report, later)
+        self.assertEqual([priority.groupId for priority in report.aiAnalysis.priorities], ["G4", "G1", "G2"])
 
     def test_ai_node_is_runnable(self):
         workflow = WorkflowDraft.model_validate({

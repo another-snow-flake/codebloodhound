@@ -2,23 +2,35 @@ from collections.abc import Callable
 from graphlib import CycleError, TopologicalSorter
 from typing import NamedTuple
 
-from .ai import MAX_GROUPS, MAX_PRIORITIES, explain_findings, group_findings
+from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities
 from .llm import LlmError, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_kotlin_issues
 from .schemas import AiAnalysis, ApiProblem, Edge, Finding, Node, RunReport, WorkflowDraft
 from .sources import find_secrets
 from .storage import Storage
+from .webhooks import WEBHOOK_REF, WebhookError, send_webhook
 
 
 SEVERITY_RANK = {severity: rank for rank, severity in enumerate(("low", "medium", "high", "critical"))}
 SCANNERS = {"secrets": find_secrets, "sca": find_vulnerable_dependencies, "sast": find_kotlin_issues}
-SUPPORTED_NODES = {"trigger", "condition", "ai", *SCANNERS}
+SUPPORTED_NODES = {"trigger", "condition", "ai", "notify", *SCANNERS}
 
 
 class ExecutionPlan(NamedTuple):
     nodes: list[Node]
     incoming: dict[str, list[Edge]]
+
+
+class NodeContext(NamedTuple):
+    findings: dict[str, Finding]
+    analyses: dict[str, AiAnalysis]
+
+
+class AiNodeResult(NamedTuple):
+    output: dict
+    error: str | None
+    analysis: AiAnalysis | None
 
 
 def validate_edges(workflow: WorkflowDraft) -> dict[str, list[Edge]]:
@@ -60,31 +72,38 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
             minimum = node.config.get("minSeverity")
             if not isinstance(minimum, str) or minimum not in SEVERITY_RANK:
                 raise ApiProblem(422, "invalid_node_config", "Condition requires a valid config.minSeverity.")
+        if node.type == "notify":
+            ref = node.config.get("webhookRef")
+            if not isinstance(ref, str) or not WEBHOOK_REF.fullmatch(ref):
+                raise ApiProblem(422, "invalid_webhook_ref", "Notification requires a valid config.webhookRef.")
     return ExecutionPlan(ordered, incoming)
 
 
 def merge_analysis(report: RunReport, analysis: AiAnalysis) -> None:
     """Several AI nodes: keep the first summary, add cards for findings not explained yet."""
     if report.aiAnalysis is None:
-        report.aiAnalysis = analysis
+        report.aiAnalysis = analysis.model_copy(deep=True)
         return
     current = report.aiAnalysis
     known = {item.findingId for item in current.recommendations}
-    offset = len(current.groups)
-    renamed = {}
-    for number, group in enumerate(
-        (group for group in analysis.groups if not known.issuperset(group.findingIds)), start=offset + 1
-    ):
-        renamed[group.id] = f"G{number}"
-        current.groups.append(group.model_copy(update={"id": renamed[group.id]}))
+    used_ids = {group.id for group in current.groups}
+    next_number = len(used_ids) + 1
+    actions = {item.groupId: item.action for item in current.priorities}
+    incoming_actions = {item.groupId: item.action for item in analysis.priorities}
+    for group in analysis.groups:
+        if known.issuperset(group.findingIds):
+            continue
+        while f"G{next_number}" in used_ids:
+            next_number += 1
+        group_id = f"G{next_number}"
+        next_number += 1
+        current.groups.append(group.model_copy(update={"id": group_id}))
+        actions[group_id] = incoming_actions.get(group.id, group.action)
     current.recommendations.extend(item for item in analysis.recommendations if item.findingId not in known)
-    current.priorities.extend(
-        item.model_copy(update={"groupId": renamed[item.groupId]})
-        for item in analysis.priorities if item.groupId in renamed and len(current.priorities) < MAX_PRIORITIES
-    )
+    current.priorities = select_priorities(current.groups, actions)
 
 
-def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict], None] | None = None) -> tuple[dict, str | None]:
+def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict], None] | None = None) -> AiNodeResult:
     """Explain the findings that reached the AI node.
 
     `publish(output)` stores the current stage so the editor can show it while the
@@ -102,9 +121,10 @@ def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict],
     try:
         analysis = explain_findings(findings, load_llm() if findings else None, stage)
     except LlmError as error:
-        return (
+        return AiNodeResult(
             {"aiAvailable": False, "stage": "failed", "errorCode": error.code, "total": total},
             f"AI unavailable: {error}",
+            None,
         )
 
     merge_analysis(report, analysis)
@@ -112,12 +132,12 @@ def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict],
     groups = len(group_findings(findings))
     if groups > MAX_GROUPS:
         output["limit"] = MAX_GROUPS
-    return output, None
+    return AiNodeResult(output, None, analysis)
 
 
 def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, source_id: str, archive: bytes):
     results = {result.nodeId: result for result in report.nodes}
-    active_contexts: dict[tuple[str, str | None], list[Finding]] = {}
+    active_contexts: dict[tuple[str, str | None], NodeContext] = {}
     report.status = "running"
     storage.save_run(report)
     for node in plan.nodes:
@@ -134,7 +154,10 @@ def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, sourc
 
         result.status = "running"
         storage.save_run(report)
-        context = {finding.id: finding for group in active_inputs for finding in group}
+        context = NodeContext(
+            {key: finding for item in active_inputs for key, finding in item.findings.items()},
+            {key: analysis for item in active_inputs for key, analysis in item.analyses.items()},
+        )
         handle = None
         try:
             if node.type == "trigger":
@@ -142,11 +165,11 @@ def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, sourc
             elif node.type in SCANNERS:
                 findings = SCANNERS[node.type](archive)
                 report.findings.extend(findings)
-                context.update((finding.id, finding) for finding in findings)
+                context.findings.update((finding.id, finding) for finding in findings)
                 result.output = {"findings": [finding.model_dump(mode="json", exclude_unset=True) for finding in findings]}
             elif node.type == "condition":
                 minimum_rank = SEVERITY_RANK[node.config["minSeverity"]]
-                matched = any(SEVERITY_RANK[finding.severity] >= minimum_rank for finding in context.values())
+                matched = any(SEVERITY_RANK[finding.severity] >= minimum_rank for finding in context.findings.values())
                 result.output = {"matched": matched}
                 handle = "true" if matched else "false"
             elif node.type == "ai":
@@ -154,9 +177,30 @@ def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, sourc
                     result.output = output
                     storage.save_run(report)
 
-                result.output, result.error = run_ai(report, list(context.values()), publish)
+                outcome = run_ai(report, list(context.findings.values()), publish)
+                result.output, result.error = outcome.output, outcome.error
+                if outcome.analysis is not None:
+                    context.analyses[node.id] = outcome.analysis
+            elif node.type == "notify":
+                status_code = send_webhook(node.config["webhookRef"], {
+                    "runId": report.runId, "workflowId": report.workflowId, "nodeId": node.id,
+                    "findings": [
+                        finding.model_dump(mode="json", exclude_none=True) for finding in context.findings.values()
+                    ],
+                    "aiAnalyses": [
+                        {"nodeId": node_id, **analysis.model_dump(mode="json")}
+                        for node_id, analysis in context.analyses.items()
+                    ],
+                })
+                result.output = {"delivered": True, "statusCode": status_code}
             result.status = "succeeded"
-            active_contexts[node.id, handle] = list(context.values())
+            active_contexts[node.id, handle] = context
+        except WebhookError as error:
+            result.status = "failed"
+            result.error = str(error)
+            result.output = {"delivered": False, "errorCode": error.code}
+            if error.status_code is not None:
+                result.output["statusCode"] = error.status_code
         except CatalogUnavailable as error:
             result.status = "failed"
             result.error = str(error)
