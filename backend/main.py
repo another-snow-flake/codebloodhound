@@ -9,10 +9,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from .ai import answer_report_question
-from .llm import LlmError, load_llm
+from .llm import LlmError, list_model_options, load_llm, select_model, selected_model_id
 from .runner import execute_plan, plan_run, validate_edges
 from .schemas import (
-    ApiProblem, NodeResult, RunChatRequest, RunChatResponse, RunCreated,
+    ApiProblem, LlmOptionOut, LlmSelection, LlmSettings, NodeResult, RunChatRequest, RunChatResponse, RunCreated,
     RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
 )
 from .sources import MAX_UPLOAD, validate_zip
@@ -135,14 +135,41 @@ def create_app(dsn: str | None = None) -> FastAPI:
         if report.status not in ("succeeded", "failed"):
             raise ApiProblem(409, "run_in_progress", "Wait for the workflow to finish before asking a question.")
         try:
-            reply = answer_report_question(report.findings, request.question, request.history, load_llm())
+            client = load_llm()  # taken once: a model switch during the answer does not affect it
+            reply = answer_report_question(report.findings, request.question, request.history, client)
         except LlmError as error:
             status = {
-                "not_configured": 503, "bad_config": 503, "connection_error": 503,
+                "not_configured": 503, "bad_config": 503, "connection_error": 503, "model_missing": 503,
                 "rate_limited": 429, "timeout": 504,
             }.get(error.code, 502)
             raise ApiProblem(status, error.code, str(error)) from None
-        return RunChatResponse(answer=reply)
+        return RunChatResponse(answer=reply, model=f"{client.provider}:{client.model}")
+
+    def llm_settings() -> LlmSettings:
+        try:
+            options = list_model_options()
+            selected = selected_model_id()
+        except LlmError as error:
+            raise ApiProblem(503, error.code, str(error)) from None
+        return LlmSettings(
+            selectedId=selected,
+            options=[LlmOptionOut(**vars(option)) for option in options],
+        )
+
+    @app.get("/settings/llm")
+    def get_llm_settings() -> LlmSettings:
+        """Models the server offers, their status, and the one used for the next AI request."""
+        return llm_settings()
+
+    @app.put("/settings/llm")
+    def put_llm_settings(selection: LlmSelection) -> LlmSettings:
+        """Switch the model for the next AI node run and chat message without restarting the API."""
+        try:
+            select_model(selection.modelId, list_model_options())
+        except LlmError as error:
+            status = {"unknown_model": 404, "no_api_key": 409}.get(error.code, 503)
+            raise ApiProblem(status, error.code, str(error)) from None
+        return llm_settings()
 
     return app
 

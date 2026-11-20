@@ -111,6 +111,24 @@ class RunChatRequest(BaseModel):
 
 class RunChatResponse(BaseModel):
     answer: str
+    model: str | None = None
+
+
+class LlmOptionOut(BaseModel):
+    id: str
+    provider: Literal["local", "deepseek"]
+    model: str
+    available: bool
+    reason: Literal["connection_error", "model_missing", "no_api_key"] | None = None
+
+
+class LlmSettings(BaseModel):
+    selectedId: str | None
+    options: list[LlmOptionOut]
+
+
+class LlmSelection(BaseModel):
+    modelId: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
 
 class NodeResult(BaseModel):

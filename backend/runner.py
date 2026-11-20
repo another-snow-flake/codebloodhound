@@ -118,17 +118,27 @@ def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict],
         if publish:
             publish(dict(progress))
 
+    model = None
     try:
-        analysis = explain_findings(findings, load_llm() if findings else None, stage)
+        client = load_llm() if findings else None  # taken once: a model switch mid-run does not affect this node
+        if getattr(client, "provider", None) and getattr(client, "model", None):
+            model = f"{client.provider}:{client.model}"
+            progress["model"] = model
+        analysis = explain_findings(findings, client, stage)
     except LlmError as error:
+        failed = {"aiAvailable": False, "stage": "failed", "errorCode": error.code, "total": total}
+        if model:
+            failed["model"] = model
         return AiNodeResult(
-            {"aiAvailable": False, "stage": "failed", "errorCode": error.code, "total": total},
+            failed,
             f"AI unavailable: {error}",
             None,
         )
 
     merge_analysis(report, analysis)
     output = {"aiAvailable": True, "stage": "done", "explained": len(analysis.recommendations), "total": total}
+    if model:
+        output["model"] = model
     groups = len(group_findings(findings))
     if groups > MAX_GROUPS:
         output["limit"] = MAX_GROUPS
