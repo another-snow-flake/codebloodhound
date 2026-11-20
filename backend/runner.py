@@ -1,6 +1,8 @@
 from graphlib import CycleError, TopologicalSorter
 from typing import NamedTuple
 
+from .ai import MAX_FINDINGS, explain_findings
+from .llm import LlmError, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_kotlin_issues
 from .schemas import ApiProblem, Edge, Finding, Node, RunReport, WorkflowDraft
@@ -10,7 +12,7 @@ from .storage import Storage
 
 SEVERITY_RANK = {severity: rank for rank, severity in enumerate(("low", "medium", "high", "critical"))}
 SCANNERS = {"secrets": find_secrets, "sca": find_vulnerable_dependencies, "sast": find_kotlin_issues}
-SUPPORTED_NODES = {"trigger", "condition", *SCANNERS}
+SUPPORTED_NODES = {"trigger", "condition", "ai", *SCANNERS}
 
 
 class ExecutionPlan(NamedTuple):
@@ -60,6 +62,32 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
     return ExecutionPlan(ordered, incoming)
 
 
+def run_ai(report: RunReport, findings: list[Finding]) -> tuple[dict, str | None]:
+    """Explain the findings that reached the AI node.
+
+    An unavailable model is not a node failure: the findings still flow to the next
+    nodes, only without recommendations.
+    """
+    total = len(findings)
+    try:
+        analysis = explain_findings(findings, load_llm()) if findings else explain_findings([], None)
+    except LlmError as error:
+        return {"aiAvailable": False, "errorCode": error.code, "total": total}, f"AI unavailable: {error}"
+
+    if report.aiAnalysis is None:
+        report.aiAnalysis = analysis
+    else:  # several AI nodes: keep one summary and merge recommendations
+        known = {item.findingId for item in report.aiAnalysis.recommendations}
+        report.aiAnalysis.recommendations.extend(
+            item for item in analysis.recommendations if item.findingId not in known
+        )
+    explained = len(analysis.recommendations)
+    output = {"aiAvailable": True, "explained": explained, "total": total}
+    if total > MAX_FINDINGS:
+        output["limit"] = MAX_FINDINGS
+    return output, None
+
+
 def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, source_id: str, archive: bytes):
     results = {result.nodeId: result for result in report.nodes}
     active_contexts: dict[tuple[str, str | None], list[Finding]] = {}
@@ -94,6 +122,8 @@ def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, sourc
                 matched = any(SEVERITY_RANK[finding.severity] >= minimum_rank for finding in context.values())
                 result.output = {"matched": matched}
                 handle = "true" if matched else "false"
+            elif node.type == "ai":
+                result.output, result.error = run_ai(report, list(context.values()))
             result.status = "succeeded"
             active_contexts[node.id, handle] = list(context.values())
         except CatalogUnavailable as error:

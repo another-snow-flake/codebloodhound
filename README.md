@@ -24,7 +24,7 @@
 
 Для полной проверки загрузите учебный архив организаторов со справочником `vulnerability-database/vulnerabilities.json`. Добавьте из каталога «Анализ зависимостей» (SCA) и «Статический анализ» (SAST) и соедините их с остальным графом. SCA берёт версии из Gradle, отдаёт приоритет `gradle.lockfile` и сверяет версии с офлайн-справочником Maven. Если вы загружаете только исходники, задайте путь к справочнику через `CYBER_GARDEN_ADVISORIES` перед запуском API. SAST проверяет Kotlin по базовым правилам для SQL, TLS, CORS и прав доступа. Находки SAST требуют проверки по контексту.
 
-Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке, расписание, AI и уведомления ещё в работе. Черновики принимают все типы нод, а попытка запустить неподключённую ноду вернёт `422 unsupported_node`.
+Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке, расписание, AI-чат и уведомления ещё в работе. Черновики принимают все типы нод, а попытка запустить неподключённую ноду вернёт `422 unsupported_node`.
 
 При разработке сверяйте изменения API с фронтендом и проверяйте их на синтетических данных. Анализаторы сами ищут проблемы. LLM будет объяснять уже найденное. Ключи и токены хранятся на бэкенде.
 
@@ -52,7 +52,7 @@ To call the API directly, use the [requests and sample graph](#workflow-api). To
 
 For a full scan, upload the organizers' training archive with `vulnerability-database/vulnerabilities.json`. Add **Анализ зависимостей** (SCA) and **Статический анализ** (SAST) from the catalog and connect them to the graph. SCA reads Gradle dependency versions, prefers `gradle.lockfile`, and checks versions against the offline Maven catalog. For a ZIP with source files only, set `CYBER_GARDEN_ADVISORIES` to the catalog path before starting the API. SAST checks Kotlin with basic rules for SQL, TLS, CORS and authorization. Review SAST findings in context.
 
-The prototype uses one local workspace. Accounts, repository URL uploads, schedules, AI, and notifications are still in progress. You can save any node type in a draft. Running a workflow with a node that isn't implemented returns `422 unsupported_node`.
+The prototype uses one local workspace. Accounts, repository URL uploads, schedules, AI chat, and notifications are still in progress. You can save any node type in a draft. Running a workflow with a node that isn't implemented returns `422 unsupported_node`.
 
 Coordinate API changes with the frontend and test them with synthetic data. The scanners find issues. The LLM will explain those findings. Keep API keys and tokens on the backend.
 
@@ -145,6 +145,8 @@ $env:LOCAL_LLM_BASE_URL = 'http://127.0.0.1:11434/v1'
 $env:LOCAL_LLM_MODEL = '<installed-model>'
 ```
 
+Проверено с `qwen3:8b` (`ollama pull qwen3:8b`). Первый запрос после запуска Ollama загружает модель в память и может идти дольше минуты, поэтому для локальной модели поставьте `$env:LLM_TIMEOUT_SECONDS = '180'`. Клиент по умолчанию отправляет `reasoning_effort: "none"`: без этого Qwen3 сначала «думает», тратит сотни токенов и чаще ломает JSON. Чтобы вернуть рассуждения, задайте `LOCAL_LLM_REASONING_EFFORT` (`low`, `medium`, `high`), а пустая строка отключает параметр. / Tested with `qwen3:8b`. The first request after Ollama starts loads the model and can take over a minute, so set `LLM_TIMEOUT_SECONDS` to `180` for a local model. The client sends `reasoning_effort: "none"` by default; override it with `LOCAL_LLM_REASONING_EFFORT`, or set it to an empty string to omit it.
+
 Укажите название установленной модели. Для другого OpenAI-совместимого сервера задайте его базовый URL и, если нужен ключ, `LOCAL_LLM_API_KEY`. / Use the installed model's name. For another OpenAI-compatible server, set its base URL and `LOCAL_LLM_API_KEY` if it requires authentication. [Ollama API](https://docs.ollama.com/api/openai-compatibility)
 
 DeepSeek API:
@@ -164,4 +166,14 @@ from backend.llm import load_llm
 
 messages = [{"role": "user", "content": 'Return a JSON object with "status" set to "ok".'}]
 answer = load_llm().complete(messages, json_mode=True)
+```
+
+### AI-нода / AI node
+
+Нода `ai` (`backend/ai.py`) отправляет модели до 15 самых критичных находок из входящих связей и записывает ответ в `aiAnalysis` отчёта. Находки получают короткие ссылки `F1`, `F2`…, а рекомендации с неизвестными или повторяющимися ссылками отбрасываются. Ответ проверяется по схеме, при сломанном JSON делается один повтор. Если модель недоступна, нода завершается со статусом `succeeded`, `output.aiAvailable = false` и текстом причины в `error`, а находки идут дальше по графу. / The `ai` node sends up to 15 of the most severe incoming findings to the model and stores the answer in the report's `aiAnalysis`. Recommendations must reference a finding that was sent. If the model is unavailable, the node still succeeds with `output.aiAvailable = false` and the findings continue through the graph.
+
+Тесты / Tests:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s backend/tests -t .
 ```

@@ -26,6 +26,7 @@ class LlmClient:
     model: str
     timeout: float
     api_key: str = field(default="", repr=False)
+    reasoning_effort: str = ""
 
     def complete(
         self,
@@ -48,6 +49,9 @@ class LlmClient:
             body["response_format"] = {"type": "json_object"}
         if self.provider == "deepseek":
             body["thinking"] = {"type": "disabled"}
+        elif self.reasoning_effort:
+            # Qwen3 and other reasoning models think by default; that wastes tokens and can break JSON.
+            body["reasoning_effort"] = self.reasoning_effort
 
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         timeout = httpx.Timeout(self.timeout, connect=min(self.timeout, 5.0))
@@ -121,4 +125,11 @@ def load_llm() -> LlmClient:
     model = os.getenv("LOCAL_LLM_MODEL", "").strip()
     if not model:
         raise LlmError("bad_config", "Set LOCAL_LLM_MODEL to a model served by the local provider.")
-    return LlmClient("local", str(url).rstrip("/"), model, timeout, os.getenv("LOCAL_LLM_API_KEY", "").strip())
+    return LlmClient(
+        "local",
+        str(url).rstrip("/"),
+        model,
+        timeout,
+        os.getenv("LOCAL_LLM_API_KEY", "").strip(),
+        os.getenv("LOCAL_LLM_REASONING_EFFORT", "none").strip(),
+    )
