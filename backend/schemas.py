@@ -43,7 +43,17 @@ class SourceCreated(BaseModel):
     sourceId: Identifier
 
 
-class RunRequest(BaseModel):
+ModelId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
+class ModelChoice(BaseModel):
+    """Model for one request. None means the server environment's model.
+    allowExternal is the user's consent to send findings to an external provider."""
+    modelId: ModelId | None = None
+    allowExternal: bool = False
+
+
+class RunRequest(ModelChoice):
     sourceId: Identifier
 
 
@@ -104,7 +114,7 @@ class ChatTurn(BaseModel):
     content: ChatText
 
 
-class RunChatRequest(BaseModel):
+class RunChatRequest(ModelChoice):
     question: ChatText
     history: list[ChatTurn] = Field(default_factory=list, max_length=8)
 
@@ -123,12 +133,20 @@ class LlmOptionOut(BaseModel):
 
 
 class LlmSettings(BaseModel):
-    selectedId: str | None
+    defaultId: str | None
     options: list[LlmOptionOut]
 
 
-class LlmSelection(BaseModel):
-    modelId: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+class LlmCheckRequest(ModelChoice):
+    modelId: ModelId
+
+
+class LlmCheckResult(BaseModel):
+    modelId: str
+    ok: bool
+    seconds: float | None = None
+    code: str | None = None
+    message: str | None = None
 
 
 class NodeResult(BaseModel):

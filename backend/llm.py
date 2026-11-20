@@ -1,7 +1,8 @@
 import json
 import math
 import os
-import threading
+import re
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
@@ -96,8 +97,6 @@ class LlmClient:
 
 Provider = Literal["local", "deepseek"]
 PROBE_TIMEOUT = 3.0
-_selection_lock = threading.Lock()
-_selected_id: str | None = None  # chosen in the editor; None means the server environment decides
 
 
 @dataclass(frozen=True)
@@ -185,7 +184,8 @@ def _installed_local_models() -> list[str]:
 
 
 def list_model_options() -> list[ModelOption]:
-    """Models the editor may choose from, with their current status."""
+    """Models the editor may choose from. Local status comes from the model server's list;
+    for DeepSeek it only says whether a key is configured, not whether the key works."""
     options = []
     configured = _names("LOCAL_LLM_MODELS", os.getenv("LOCAL_LLM_MODEL", ""))
     try:
@@ -204,40 +204,70 @@ def list_model_options() -> list[ModelOption]:
     return options
 
 
-def selected_model_id() -> str | None:
-    with _selection_lock:
-        if _selected_id is not None:
-            return _selected_id
+def default_model_id() -> str | None:
+    """The model the server environment selects when a request names none."""
     choice = _environment_choice()
     return _option_id(*choice) if choice and choice[1] else None
 
 
-def select_model(option_id: str, options: Sequence[ModelOption]) -> None:
-    """Use this model for the next AI node run and chat message. Requests in flight keep their model."""
-    global _selected_id
-    option = next((item for item in options if item.id == option_id), None)
-    if option is None:
-        raise LlmError("unknown_model", "This model is not configured on the server.")
-    if option.reason == "no_api_key":
-        raise LlmError("no_api_key", "Set DEEPSEEK_API_KEY on the server to use DeepSeek.")
-    with _selection_lock:
-        _selected_id = option.id
+LOCAL_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}")
 
 
-def reset_model_selection() -> None:
-    global _selected_id
-    with _selection_lock:
-        _selected_id = None
+@dataclass(frozen=True)
+class ModelSpec:
+    provider: Provider
+    model: str
+
+    @property
+    def id(self) -> str:
+        return _option_id(self.provider, self.model)
+
+
+def resolve_model(model_id: str | None, allow_external: bool = False) -> ModelSpec:
+    """Fix the model for one request before it runs.
+
+    No ID means the server environment's model. An explicit DeepSeek model needs
+    `allow_external`: the user agreed that findings may leave this machine.
+    """
+    if not model_id:
+        choice = _environment_choice()
+        if choice is None:
+            raise LlmError("not_configured", "Set LLM_PROVIDER to local or deepseek to enable the model.")
+        provider, model = choice
+        if not model:
+            raise LlmError("bad_config", "Set LOCAL_LLM_MODEL to a model served by the local provider.")
+        return ModelSpec(provider, model)
+
+    provider, _, model = model_id.partition(":")
+    if provider == "local" and LOCAL_MODEL_NAME.fullmatch(model):
+        return ModelSpec("local", model)
+    if provider == "deepseek" and model in _names("DEEPSEEK_MODELS", os.getenv("DEEPSEEK_MODEL", "deepseek-flash")):
+        if not os.getenv("DEEPSEEK_API_KEY", "").strip():
+            raise LlmError("no_api_key", "Set DEEPSEEK_API_KEY on the server to use DeepSeek.")
+        if not allow_external:
+            raise LlmError("consent_required", "Confirm that findings may be sent to DeepSeek.")
+        return ModelSpec("deepseek", model)
+    raise LlmError("unknown_model", "This model is not configured on the server.")
+
+
+def client_for(spec: ModelSpec) -> LlmClient:
+    return build_client(spec.provider, spec.model)
+
+
+def check_model(spec: ModelSpec) -> float:
+    """Send a tiny synthetic request (no project data) and return the answer time in seconds.
+
+    Raises `LlmError` with the reason: auth_error, connection_error, model_missing, timeout...
+    """
+    started = time.monotonic()
+    try:
+        client_for(spec).complete([{"role": "user", "content": "Ответь одним словом: ok"}], max_tokens=16)
+    except LlmError as error:
+        if error.code != "incomplete_response":  # a cut-off answer still proves the model responds
+            raise
+    return time.monotonic() - started
 
 
 def load_llm() -> LlmClient:
-    """Build the client for the model chosen in the editor, or by the server environment."""
-    with _selection_lock:
-        chosen = _selected_id
-    if chosen is not None:
-        provider, model = chosen.split(":", 1)
-        return build_client(provider, model)
-    choice = _environment_choice()
-    if choice is None:
-        raise LlmError("not_configured", "Set LLM_PROVIDER to local or deepseek to enable the model.")
-    return build_client(*choice)
+    """Client for the server environment's model."""
+    return client_for(resolve_model(None))

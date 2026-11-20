@@ -9,15 +9,35 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from .ai import answer_report_question
-from .llm import LlmError, list_model_options, load_llm, select_model, selected_model_id
+from .llm import LlmError, ModelSpec, check_model, client_for, default_model_id, list_model_options, resolve_model
 from .runner import execute_plan, plan_run, validate_edges
 from .schemas import (
-    ApiProblem, LlmOptionOut, LlmSelection, LlmSettings, NodeResult, RunChatRequest, RunChatResponse, RunCreated,
+    ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, NodeResult,
+    RunChatRequest, RunChatResponse, RunCreated,
     RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
 )
 from .sources import MAX_UPLOAD, validate_zip
 from .storage import Storage, database_url
 from .webhooks import WebhookError, configured_webhooks
+
+
+LLM_ERROR_STATUS = {
+    "consent_required": 403, "unknown_model": 422, "no_api_key": 409,
+    "not_configured": 503, "bad_config": 503, "connection_error": 503, "model_missing": 503,
+    "auth_error": 502, "billing_error": 502, "rate_limited": 429, "timeout": 504,
+}
+
+
+def llm_problem(error: LlmError) -> ApiProblem:
+    return ApiProblem(LLM_ERROR_STATUS.get(error.code, 502), error.code, str(error))
+
+
+def fixed_model(choice: ModelChoice) -> ModelSpec:
+    """Resolve and pin the model for one request; consent for external providers is checked here."""
+    try:
+        return resolve_model(choice.modelId, choice.allowExternal)
+    except LlmError as error:
+        raise llm_problem(error) from None
 
 
 LOCAL_ORIGINS = [
@@ -108,6 +128,14 @@ def create_app(dsn: str | None = None) -> FastAPI:
     def start_run(workflow_id: str, request: RunRequest, tasks: BackgroundTasks) -> RunCreated:
         workflow = get_workflow(workflow_id)
         plan = plan_run(workflow)
+        model = None
+        if any(node.type == "ai" for node in plan.nodes):
+            try:
+                model = resolve_model(request.modelId, request.allowExternal)
+            except LlmError as error:
+                if request.modelId or error.code not in ("not_configured", "bad_config"):
+                    raise llm_problem(error) from None
+                # no model configured on the server: scanners still run, the AI node reports the reason
         archive = storage.get_source(request.sourceId)
         if archive is None:
             raise ApiProblem(404, "source_not_found", "Project source not found.")
@@ -119,7 +147,7 @@ def create_app(dsn: str | None = None) -> FastAPI:
             findings=[],
         )
         storage.save_run(report)
-        tasks.add_task(execute_plan, storage, report, plan, request.sourceId, archive)
+        tasks.add_task(execute_plan, storage, report, plan, request.sourceId, archive, model)
         return RunCreated(runId=report.runId, status="queued")
 
     @app.get("/runs/{run_id}", response_model_exclude_unset=True)
@@ -134,42 +162,33 @@ def create_app(dsn: str | None = None) -> FastAPI:
         report = get_run(run_id)
         if report.status not in ("succeeded", "failed"):
             raise ApiProblem(409, "run_in_progress", "Wait for the workflow to finish before asking a question.")
+        model = fixed_model(request)  # pinned for this answer, whatever other tabs choose meanwhile
         try:
-            client = load_llm()  # taken once: a model switch during the answer does not affect it
-            reply = answer_report_question(report.findings, request.question, request.history, client)
+            reply = answer_report_question(report.findings, request.question, request.history, client_for(model))
         except LlmError as error:
-            status = {
-                "not_configured": 503, "bad_config": 503, "connection_error": 503, "model_missing": 503,
-                "rate_limited": 429, "timeout": 504,
-            }.get(error.code, 502)
-            raise ApiProblem(status, error.code, str(error)) from None
-        return RunChatResponse(answer=reply, model=f"{client.provider}:{client.model}")
-
-    def llm_settings() -> LlmSettings:
-        try:
-            options = list_model_options()
-            selected = selected_model_id()
-        except LlmError as error:
-            raise ApiProblem(503, error.code, str(error)) from None
-        return LlmSettings(
-            selectedId=selected,
-            options=[LlmOptionOut(**vars(option)) for option in options],
-        )
+            raise llm_problem(error) from None
+        return RunChatResponse(answer=reply, model=model.id)
 
     @app.get("/settings/llm")
     def get_llm_settings() -> LlmSettings:
-        """Models the server offers, their status, and the one used for the next AI request."""
-        return llm_settings()
-
-    @app.put("/settings/llm")
-    def put_llm_settings(selection: LlmSelection) -> LlmSettings:
-        """Switch the model for the next AI node run and chat message without restarting the API."""
+        """Models the server offers and the server's default. Each request names its own model."""
         try:
-            select_model(selection.modelId, list_model_options())
+            options = list_model_options()
+            default = default_model_id()
         except LlmError as error:
-            status = {"unknown_model": 404, "no_api_key": 409}.get(error.code, 503)
-            raise ApiProblem(status, error.code, str(error)) from None
-        return llm_settings()
+            raise llm_problem(error) from None
+        return LlmSettings(defaultId=default, options=[LlmOptionOut(**vars(option)) for option in options])
+
+    @app.post("/settings/llm/check")
+    def check_llm(request: LlmCheckRequest) -> LlmCheckResult:
+        """Send a synthetic request (no project data) to tell a rejected key, an unreachable
+        server and a missing model apart before the editor switches to this model."""
+        model = fixed_model(request)
+        try:
+            seconds = check_model(model)
+        except LlmError as error:
+            return LlmCheckResult(modelId=model.id, ok=False, code=error.code, message=str(error))
+        return LlmCheckResult(modelId=model.id, ok=True, seconds=round(seconds, 2))
 
     return app
 

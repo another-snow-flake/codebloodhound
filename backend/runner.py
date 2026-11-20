@@ -3,7 +3,7 @@ from graphlib import CycleError, TopologicalSorter
 from typing import NamedTuple
 
 from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities
-from .llm import LlmError, load_llm
+from .llm import LlmError, ModelSpec, client_for, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_kotlin_issues
 from .schemas import AiAnalysis, ApiProblem, Edge, Finding, Node, RunReport, WorkflowDraft
@@ -103,7 +103,10 @@ def merge_analysis(report: RunReport, analysis: AiAnalysis) -> None:
     current.priorities = select_priorities(current.groups, actions)
 
 
-def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict], None] | None = None) -> AiNodeResult:
+def run_ai(
+    report: RunReport, findings: list[Finding], publish: Callable[[dict], None] | None = None,
+    model_spec: ModelSpec | None = None,
+) -> AiNodeResult:
     """Explain the findings that reached the AI node.
 
     `publish(output)` stores the current stage so the editor can show it while the
@@ -120,7 +123,8 @@ def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict],
 
     model = None
     try:
-        client = load_llm() if findings else None  # taken once: a model switch mid-run does not affect this node
+        # the model was pinned when the run started; without one, the server environment decides
+        client = (client_for(model_spec) if model_spec else load_llm()) if findings else None
         if getattr(client, "provider", None) and getattr(client, "model", None):
             model = f"{client.provider}:{client.model}"
             progress["model"] = model
@@ -145,7 +149,10 @@ def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict],
     return AiNodeResult(output, None, analysis)
 
 
-def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, source_id: str, archive: bytes):
+def execute_plan(
+    storage: Storage, report: RunReport, plan: ExecutionPlan, source_id: str, archive: bytes,
+    model: ModelSpec | None = None,
+):
     results = {result.nodeId: result for result in report.nodes}
     active_contexts: dict[tuple[str, str | None], NodeContext] = {}
     report.status = "running"
@@ -187,7 +194,7 @@ def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, sourc
                     result.output = output
                     storage.save_run(report)
 
-                outcome = run_ai(report, list(context.findings.values()), publish)
+                outcome = run_ai(report, list(context.findings.values()), publish, model)
                 result.output, result.error = outcome.output, outcome.error
                 if outcome.analysis is not None:
                     context.analyses[node.id] = outcome.analysis

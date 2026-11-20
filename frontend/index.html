@@ -227,6 +227,7 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
   <label class="f" for="llmModel">Модель для AI-рекомендаций и чата</label>
   <select id="llmModel" aria-describedby="llmStatus"></select>
   <p class="note" id="llmStatus" aria-live="polite"></p>
+  <button type="button" class="btn" id="llmCheck">Проверить связь</button>
   <label class="chk note" id="llmConsentRow" hidden><input type="checkbox" id="llmConsent"> Разрешаю отправлять находки (пути, строки, сообщения анализаторов) во внешний сервис DeepSeek. Значения секретов не отправляются.</label>
   <p class="note">Список моделей, адреса и ключи задаются на бэкенде. Адреса webhook тоже настраиваются там, получатель выбирается в ноде «Уведомление».</p>
   <div class="row"><button class="btn" data-close>Закрыть</button><button class="btn pri" id="setSave">Сохранить и проверить</button></div>
@@ -266,6 +267,7 @@ const LLM_ERRORS={
   incomplete_response:"Модель не закончила ответ.",
   run_in_progress:"Дождитесь завершения проверки.",
   unknown_model:"Бэкенд больше не предлагает эту модель. Откройте настройки заново.",
+  consent_required:"Подтвердите в настройках отправку находок в DeepSeek.",
   model_missing:"Выбранная модель не скачана на сервере моделей. Скачайте её или выберите другую в настройках.",
   no_api_key:"Для DeepSeek на бэкенде нужен DEEPSEEK_API_KEY.",
   http_error:"Эта версия бэкенда не поддерживает чат по отчёту."
@@ -414,36 +416,54 @@ async function loadWebhookRefs(){
   if(sel?.t==="n"&&wf.nodes.some(n=>n.id===sel.id&&n.type==="notify"))inspector()
 }
 async function ping(){const t=$("#apiTag");try{await api("/health");t.textContent="бэкенд на связи";t.classList.add("ok");loadWebhookRefs();return true}catch(e){t.textContent="нет связи с бэкендом";t.classList.remove("ok");webhookRefs=[];webhookListError="Нет связи с бэкендом.";inspector();return false}}
-// выбор модели: список и статусы отдаёт бэкенд, ключи остаются на сервере
+// выбор модели: у каждой вкладки свой (sessionStorage), модель уходит с каждым запуском и вопросом в чате
 let llmSettings=null;
 const PROVIDERS={local:"локальная",deepseek:"DeepSeek API"};
+const ss={get:k=>{try{return sessionStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{v==null?sessionStorage.removeItem(k):sessionStorage.setItem(k,v)}catch(e){}}};
 function modelLabel(id){const i=String(id||"").indexOf(":");return i<0?"":`${id.slice(i+1)} · ${PROVIDERS[id.slice(0,i)]||id.slice(0,i)}`}
+function tabModel(){return ss.get("cg_model")}
+function activeModel(){return tabModel()||llmSettings?.defaultId||null}
+// что отправить бэкенду: без выбора решает сервер, согласие на DeepSeek привязано к конкретной модели
+function modelChoice(){const id=tabModel();return id?{modelId:id,allowExternal:ss.get("cg_model_consent")===id}:{}}
 function llmReason(o){return{connection_error:"локальный сервер моделей не отвечает. Запущена ли Ollama?",model_missing:`модель не скачана. Выполните ollama pull ${o.model}`,no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY"}[o.reason]||o.reason}
+const CHECK_ERRORS={auth_error:"провайдер отклонил ключ API",billing_error:"на аккаунте провайдера недостаточно средств",connection_error:"сервер модели недоступен",model_missing:"такой модели нет на сервере",timeout:"модель не ответила вовремя",rate_limited:"провайдер ограничил частоту запросов",consent_required:"нужно согласие на отправку в DeepSeek",no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY",unknown_model:"бэкенд не предлагает эту модель"};
 async function loadLlm(){const s=$("#llmModel"),st=$("#llmStatus");s.disabled=true;st.textContent="Загружаю список моделей…";$("#llmConsent").checked=false;
   try{llmSettings=await api("/settings/llm")}
   catch(e){llmSettings=null;s.innerHTML="";$("#llmConsentRow").hidden=true;st.innerHTML=`<span style="color:var(--bad)">${esc(e.code==="http_error"?"Эта версия бэкенда не поддерживает выбор модели.":e.message)}</span>`;renderAI();return}
   const groups=[["local","Локальная модель: данные остаются на компьютере"],["deepseek","DeepSeek API: внешний сервис"]];
-  s.innerHTML=(llmSettings.selectedId?"":`<option value="">Не выбрана</option>`)+groups.map(([p,title])=>{const list=llmSettings.options.filter(o=>o.provider===p);
+  const cur=activeModel(),known=llmSettings.options.some(o=>o.id===cur);
+  s.innerHTML=(cur?"":`<option value="">Не выбрана</option>`)+(cur&&!known?`<option value="${esc(cur)}">${esc(modelLabel(cur))} (нет в списке)</option>`:"")+groups.map(([p,title])=>{const list=llmSettings.options.filter(o=>o.provider===p);
     return list.length?`<optgroup label="${esc(title)}">${list.map(o=>`<option value="${esc(o.id)}" ${o.reason==="no_api_key"?"disabled":""}>${esc(o.model)}${o.available?"":" (недоступна)"}</option>`).join("")}</optgroup>`:""}).join("");
-  s.value=llmSettings.selectedId||"";s.disabled=false;llmStatusNote();renderAI()}
-function llmStatusNote(){const id=$("#llmModel").value,cur=llmSettings?.selectedId,o=llmSettings?.options.find(x=>x.id===id),st=$("#llmStatus");
-  $("#llmConsentRow").hidden=!(o?.provider==="deepseek"&&!cur?.startsWith("deepseek:"));
+  s.value=cur||"";s.disabled=false;llmStatusNote();renderAI()}
+function llmStatusNote(extra=""){const id=$("#llmModel").value,cur=activeModel(),o=llmSettings?.options.find(x=>x.id===id),st=$("#llmStatus");
+  $("#llmConsentRow").hidden=!(o?.provider==="deepseek"&&ss.get("cg_model_consent")!==id);
   if(!llmSettings)return;
-  if(!o){st.textContent=cur?`Сейчас используется ${modelLabel(cur)}, но бэкенд её больше не предлагает.`:"Модель не выбрана: AI-нода и чат работать не будут.";return}
-  const state=o.available?`<span style="color:var(--ok)">${o.provider==="local"?"доступна":"ключ настроен"}</span>`:`<span style="color:var(--bad)">недоступна: ${esc(llmReason(o))}</span>`;
-  st.innerHTML=`${o.id===cur?"Сейчас используется":"Будет выбрана"}: <b>${esc(o.model)}</b> (${PROVIDERS[o.provider]}), ${state}.<br>Смена применится к следующему запуску AI-ноды и следующему вопросу в чате. Запрос, который уже идёт, закончится на прежней модели.`}
-$("#llmModel").onchange=llmStatusNote;
+  if(!o){st.innerHTML=(cur?`Модель ${esc(modelLabel(cur))} бэкенд больше не предлагает.`:"Модель не выбрана: AI-нода и чат работать не будут.")+extra;return}
+  const state=!o.available?`<span style="color:var(--bad)">недоступна: ${esc(llmReason(o))}</span>`:o.provider==="local"?"установлена на сервере моделей":"ключ на бэкенде настроен, связь не проверена";
+  st.innerHTML=`${o.id===cur?"Сейчас в этой вкладке":"Будет выбрана"}: <b>${esc(o.model)}</b> (${PROVIDERS[o.provider]}), ${state}.${extra}<br>Выбор действует только в этой вкладке и применяется к следующему запуску и вопросу в чате.`}
+async function checkLlm(id){const consent=$("#llmConsentRow").hidden?ss.get("cg_model_consent")===id:$("#llmConsent").checked;
+  return api("/settings/llm/check",{method:"POST",headers:JH,body:JSON.stringify({modelId:id,allowExternal:consent})})}
+function checkText(r){return r.ok?` <span style="color:var(--ok)">Связь проверена: ответ за ${r.seconds} с.</span>`:` <span style="color:var(--bad)">Проверка не прошла: ${esc(CHECK_ERRORS[r.code]||r.message||r.code)}.</span>`}
+$("#llmModel").onchange=()=>llmStatusNote();
+$("#llmCheck").onclick=async()=>{const id=$("#llmModel").value;if(!id)return;
+  if(!$("#llmConsentRow").hidden&&!$("#llmConsent").checked)return toast("Для проверки DeepSeek отметьте согласие на отправку данных");
+  $("#llmCheck").disabled=true;$("#llmStatus").textContent="Проверяю связь с моделью…";
+  try{llmStatusNote(checkText(await checkLlm(id)))}catch(e){llmStatusNote(` <span style="color:var(--bad)">${esc(CHECK_ERRORS[e.code]||e.message)}</span>`)}
+  finally{$("#llmCheck").disabled=false}};
 $("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open");loadLlm()};
 $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||"http://127.0.0.1:8000";
-  if(next!==API){if(running)return toast("Адрес API можно сменить после завершения проверки");webhookRefs=[];webhookListError="Загрузка получателей…";API=next;inspector();ls.set("cg_api",API);const ok=await ping();if(ok)loadLlm();
+  if(next!==API){if(running)return toast("Адрес API можно сменить после завершения проверки");webhookRefs=[];webhookListError="Загрузка получателей…";API=next;inspector();ls.set("cg_api",API);ss.set("cg_model",null);ss.set("cg_model_consent",null);const ok=await ping();if(ok)loadLlm();
     return toast(ok?"Бэкенд на связи. Проверьте модель для нового адреса.":"Нет связи с бэкендом по адресу "+API)}
   const id=$("#llmModel").value;
-  if(llmSettings&&id&&id!==llmSettings.selectedId){
-    if(!$("#llmConsentRow").hidden&&!$("#llmConsent").checked)return toast("Подтвердите, что находки можно отправлять в DeepSeek");
-    try{llmSettings=await api("/settings/llm",{method:"PUT",headers:JH,body:JSON.stringify({modelId:id})})}
-    catch(e){$("#llmStatus").innerHTML=`<span style="color:var(--bad)">${esc(LLM_ERRORS[e.code]||e.message)}</span>`;return}
-    const o=llmSettings.options.find(x=>x.id===llmSettings.selectedId);renderAI();$("#ovSet").classList.remove("open");
-    return toast(`Модель: ${modelLabel(llmSettings.selectedId)}. ${o?.available?"Применится к следующему запросу.":"Сейчас она недоступна, проверьте сервер моделей."}`)}
+  if(llmSettings&&id&&id!==activeModel()){
+    const external=!$("#llmConsentRow").hidden;
+    if(external&&!$("#llmConsent").checked)return toast("Подтвердите, что находки можно отправлять в DeepSeek");
+    $("#setSave").disabled=true;$("#llmStatus").textContent="Проверяю связь с моделью перед сменой…";
+    let r;try{r=await checkLlm(id)}catch(e){r={ok:false,code:e.code,message:e.message}}finally{$("#setSave").disabled=false}
+    if(!r.ok){$("#llmModel").value=activeModel()||"";llmStatusNote(checkText(r)+" Оставлена прежняя модель.");return}
+    ss.set("cg_model",id);if(external)ss.set("cg_model_consent",id);
+    renderAI();$("#ovSet").classList.remove("open");
+    return toast(`Модель в этой вкладке: ${modelLabel(id)}. Ответ за ${r.seconds} с.`)}
   $("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
 $("#theme").onclick=()=>{const d=document.documentElement,dark=d.dataset.theme?d.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;d.dataset.theme=dark?"light":"dark"};
 $("#aiToggle").onclick=()=>{
@@ -483,7 +503,7 @@ $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)ret
   const runSource=sourceId;
   running=true;$("#runBtn").disabled=true;$("#runBtn").textContent="Идёт запуск…";pick=null;inspector();renderChat();
   try{await save();
-    const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource})});
+    const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource,...modelChoice()})});
     report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};openRep();render();renderRep();renderAI();
     for(let i=0;i<150;i++){await wait(800);report=await api("/runs/"+r.runId);report.findings=report.findings||[];render();renderRep();renderAI();if(report.status==="succeeded"||report.status==="failed")break}
     if(report.status==="running"||report.status==="queued")toast("Запуск идёт дольше обычного. Откройте отчёт позже: "+r.runId)}
@@ -611,7 +631,7 @@ $("#reportChat").onsubmit = async event => {
   const slowTimer = setTimeout(() => { if (chatState === state && state.pending) renderChat(true) }, 20500);
   try {
     const reply = await api(`/runs/${encodeURIComponent(state.runId)}/chat`, {
-      method: "POST", headers: JH, body: JSON.stringify({question, history})
+      method: "POST", headers: JH, body: JSON.stringify({question, history, ...modelChoice()})
     });
     state.turns.push({role: "assistant", content: reply.answer});
   } catch (error) {
@@ -650,7 +670,7 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
   const active=aiRes.find(s=>s.status==="running"&&s.output?.stage);
   const failed=aiRes.map(s=>s.output).find(o=>o?.aiAvailable===false);
   const done=aiRes.map(s=>s.output).filter(o=>o?.aiAvailable);
-  const current=llmSettings?.selectedId?modelLabel(llmSettings.selectedId):"";
+  const current=modelLabel(activeModel());
   $("#llmTag").textContent=active?"AI работает…":a?"AI-анализ готов":failed?"LLM недоступна":current;
   $("#llmTag").title=current?`Модель для следующего запроса: ${current}. Сменить можно в настройках.`:"";
   renderChat();
