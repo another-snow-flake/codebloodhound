@@ -20,6 +20,7 @@ import hmac
 import json
 import secrets
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -28,6 +29,9 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 MAX_BODY = 1024 * 1024
 MAX_CONCURRENT = 2  # one GPU: queueing more requests only makes every answer slower
+MAX_CONNECTIONS = 16  # open connections, including ones still sending their request
+READ_TIMEOUT = 15  # seconds for any single read, and for reading the whole request body
+BUSY_RESPONSE = b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 ROUTES = {("GET", "/v1/models"), ("POST", "/v1/chat/completions")}
 
 
@@ -49,6 +53,21 @@ def make_handler(token: str, ollama: str, timeout: float):
     class Gateway(BaseHTTPRequestHandler):
         server_version = "llm-gateway"
         sys_version = ""
+        timeout = READ_TIMEOUT  # socket timeout: a client that stops sending is dropped
+
+        def read_body(self, length: int) -> bytes | None:
+            """Read the body within READ_TIMEOUT overall, so a byte-by-byte sender cannot hold a slot."""
+            deadline = time.monotonic() + READ_TIMEOUT
+            chunks, remaining = [], length
+            while remaining:
+                if time.monotonic() > deadline:
+                    return None
+                chunk = self.rfile.read1(min(remaining, 65536))
+                if not chunk:
+                    return None
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            return b"".join(chunks)
 
         def log_message(self, fmt, *args):  # keep request bodies and tokens out of logs
             print(f"{self.log_date_time_string()} {self.command} {self.path.split('?')[0]} -> {args[1] if len(args) > 1 else ''}", flush=True)
@@ -79,7 +98,13 @@ def make_handler(token: str, ollama: str, timeout: float):
                     return self.error(411, "Content-Length is required.")
                 if not 0 < length <= MAX_BODY:
                     return self.error(413, "Request body is too large.")
-                body = self.rfile.read(length)
+                try:
+                    body = self.read_body(length)
+                except (TimeoutError, OSError):
+                    body = None
+                if body is None:
+                    self.close_connection = True
+                    return self.error(408, "The request body was not received in time.")
                 try:
                     payload = json.loads(body)
                 except ValueError:
@@ -112,6 +137,35 @@ def make_handler(token: str, ollama: str, timeout: float):
     return Gateway
 
 
+class LimitedServer(ThreadingHTTPServer):
+    """Threaded server that refuses connections beyond MAX_CONNECTIONS instead of queueing threads."""
+    daemon_threads = True
+
+    def __init__(self, address, handler, max_connections: int = MAX_CONNECTIONS):
+        super().__init__(address, handler)
+        self.connections = threading.BoundedSemaphore(max_connections)
+
+    def process_request(self, request, client_address):
+        if not self.connections.acquire(blocking=False):
+            try:
+                request.sendall(BUSY_RESPONSE)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.connections.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.connections.release()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--token-file", type=Path, required=True)
@@ -120,7 +174,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=300)
     args = parser.parse_args()
     token = load_token(args.token_file)
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(token, args.ollama.rstrip("/"), args.timeout))
+    server = LimitedServer(("127.0.0.1", args.port), make_handler(token, args.ollama.rstrip("/"), args.timeout))
     print(f"LLM gateway on http://127.0.0.1:{args.port} -> {args.ollama} (token in {args.token_file})", flush=True)
     server.serve_forever()
 
