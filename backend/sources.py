@@ -1,6 +1,7 @@
 import io
 import re
 import stat
+from collections.abc import Iterator
 from pathlib import PurePosixPath
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
@@ -14,11 +15,21 @@ MAX_PROJECT_SIZE = 40 * 1024 * 1024
 MAX_FILES = 2000
 MAX_TEXT_FILE = 1024 * 1024
 TEXT_SUFFIXES = {".kt", ".kts", ".java", ".properties", ".yml", ".yaml", ".json", ".toml", ".env"}
+CODE_SUFFIXES = {".kt", ".kts", ".java"}
+SECRET_KEY = r"[\w.-]*(?:password|passwd|secret|token|api[-_.]?key)"
 SECRET_ASSIGNMENT = re.compile(
-    r'''(?ix)^\s*(?:(?:export|val|var)\s+)?
-    ["']?(?P<key>[\w.-]*(?:password|passwd|secret|token|api[-_.]?key))["']?
+    rf'''(?ix)^\s*(?:(?:export|(?:(?:private|protected|internal|public|override|const)\s+)*(?:val|var))\s+)?
+    ["']?(?P<key>{SECRET_KEY})["']?
     \s*(?::\s*String\??\s*=|[:=])\s*(?P<value>[^\s#,]+)'''
 )
+AUTHORIZATION_VALUE = re.compile(r'''(?i)^\s*["']?authorization["']?\s*[:=]\s*["']?(?:Bearer|Basic)\s+([^\s"'#,]+)''')
+KOTLIN_STRING = r'"(?:[^"\\$]|\\.)+"'
+KOTLIN_ENV_FALLBACK = re.compile(
+    rf'''\bSystem\.getenv\(\s*"(?i:{SECRET_KEY})"\s*\)\s*\?:\s*{KOTLIN_STRING}\s*(?://.*)?$'''
+)
+KOTLIN_LOCAL = re.compile(r"^\s*(?:val|var)\s+([a-zA-Z_]\w*)\s*=\s*(.*?)\s*$")
+KOTLIN_CONCAT = re.compile(r"[a-zA-Z_]\w*(?:\s*\+\s*[a-zA-Z_]\w*)+")
+KOTLIN_BEARER = re.compile(r"\bsetBearerAuth\(\s*([a-zA-Z_]\w*)\s*\)")
 
 
 def validate_zip(data: bytes) -> None:
@@ -57,17 +68,14 @@ def find_secrets(data: bytes) -> list[Finding]:
             if path.suffix.lower() not in TEXT_SUFFIXES and not path.name.startswith(".env"):
                 continue
             content = archive.read(entry).decode("utf-8-sig", errors="replace")
-            for line_number, line in enumerate(content.splitlines(), start=1):
-                match = SECRET_ASSIGNMENT.match(line)
-                if not match:
-                    continue
-                raw_value = match["value"]
-                value = raw_value.rstrip(";").strip("\"'")
-                if not value or value.startswith("$"):
-                    continue
-                quoted = raw_value.startswith(("\"", "'"))
-                if not quoted and (path.suffix.lower() in {".kt", ".kts", ".java"} or "(" in value):
-                    continue
+            suffix = path.suffix.lower()
+            lines = content.splitlines()
+            matched_lines = {
+                number for number, line in enumerate(lines, start=1) if has_secret_assignment(line, suffix)
+            }
+            if suffix in {".kt", ".kts"}:
+                matched_lines.update(kotlin_secret_lines(lines))
+            for line_number in sorted(matched_lines):
                 findings.append(Finding(
                     id=uuid4().hex,
                     scanner="secrets",
@@ -78,3 +86,43 @@ def find_secrets(data: bytes) -> list[Finding]:
                     message="Possible hardcoded credential. Move it to a secret store or environment variable.",
                 ))
     return findings
+
+
+def has_secret_assignment(line: str, suffix: str) -> bool:
+    if suffix not in CODE_SUFFIXES:
+        authorization = AUTHORIZATION_VALUE.match(line)
+        if authorization and "$" not in authorization[1]:
+            return True
+
+    match = SECRET_ASSIGNMENT.match(line)
+    if not match:
+        return False
+    raw_value = match["value"]
+    value = raw_value.rstrip(";").strip("\"'")
+    quoted = raw_value.startswith(("\"", "'"))
+    return bool(value) and not value.startswith("$") and (quoted or (suffix not in CODE_SUFFIXES and "(" not in value))
+
+
+def kotlin_secret_lines(lines: list[str]) -> Iterator[int]:
+    local_strings: dict[str, int] = {}
+    for number, line in enumerate(lines, start=1):
+        if line.lstrip().startswith(("//", "*", "/*")):
+            local_strings.clear()
+            continue
+        if KOTLIN_ENV_FALLBACK.search(line):
+            yield number
+
+        declaration = KOTLIN_LOCAL.match(line)
+        if declaration:
+            name, value = declaration.groups()
+            local_strings.pop(name, None)
+            if re.fullmatch(KOTLIN_STRING, value):
+                local_strings[name] = number
+            elif number < len(lines) and KOTLIN_CONCAT.fullmatch(value):
+                parts = [part.strip() for part in value.split("+")]
+                bearer = KOTLIN_BEARER.search(lines[number])
+                if bearer and bearer[1] == name and all(part in local_strings for part in parts):
+                    yield min(local_strings[part] for part in parts)
+            continue
+        if line.strip():
+            local_strings.clear()
