@@ -73,9 +73,27 @@ class Recommendation(BaseModel):
     remediation: str
 
 
+class AiGroup(BaseModel):
+    """Findings that share one fix, e.g. several CVEs closed by one dependency update."""
+    id: Identifier
+    title: str
+    action: str
+    explanation: str
+    severity: Severity
+    rationale: str
+    findingIds: list[Identifier]
+
+
+class AiPriority(BaseModel):
+    groupId: Identifier
+    action: str
+
+
 class AiAnalysis(BaseModel):
     summary: str
     recommendations: list[Recommendation]
+    priorities: list[AiPriority] = Field(default_factory=list)
+    groups: list[AiGroup] = Field(default_factory=list)
 
 
 ChatText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]

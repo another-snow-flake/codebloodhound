@@ -1,11 +1,12 @@
+from collections.abc import Callable
 from graphlib import CycleError, TopologicalSorter
 from typing import NamedTuple
 
-from .ai import MAX_FINDINGS, explain_findings
+from .ai import MAX_GROUPS, MAX_PRIORITIES, explain_findings, group_findings
 from .llm import LlmError, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_kotlin_issues
-from .schemas import ApiProblem, Edge, Finding, Node, RunReport, WorkflowDraft
+from .schemas import AiAnalysis, ApiProblem, Edge, Finding, Node, RunReport, WorkflowDraft
 from .sources import find_secrets
 from .storage import Storage
 
@@ -62,29 +63,55 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
     return ExecutionPlan(ordered, incoming)
 
 
-def run_ai(report: RunReport, findings: list[Finding]) -> tuple[dict, str | None]:
-    """Explain the findings that reached the AI node.
-
-    An unavailable model is not a node failure: the findings still flow to the next
-    nodes, only without recommendations.
-    """
-    total = len(findings)
-    try:
-        analysis = explain_findings(findings, load_llm()) if findings else explain_findings([], None)
-    except LlmError as error:
-        return {"aiAvailable": False, "errorCode": error.code, "total": total}, f"AI unavailable: {error}"
-
+def merge_analysis(report: RunReport, analysis: AiAnalysis) -> None:
+    """Several AI nodes: keep the first summary, add cards for findings not explained yet."""
     if report.aiAnalysis is None:
         report.aiAnalysis = analysis
-    else:  # several AI nodes: keep one summary and merge recommendations
-        known = {item.findingId for item in report.aiAnalysis.recommendations}
-        report.aiAnalysis.recommendations.extend(
-            item for item in analysis.recommendations if item.findingId not in known
+        return
+    current = report.aiAnalysis
+    known = {item.findingId for item in current.recommendations}
+    offset = len(current.groups)
+    renamed = {}
+    for number, group in enumerate(
+        (group for group in analysis.groups if not known.issuperset(group.findingIds)), start=offset + 1
+    ):
+        renamed[group.id] = f"G{number}"
+        current.groups.append(group.model_copy(update={"id": renamed[group.id]}))
+    current.recommendations.extend(item for item in analysis.recommendations if item.findingId not in known)
+    current.priorities.extend(
+        item.model_copy(update={"groupId": renamed[item.groupId]})
+        for item in analysis.priorities if item.groupId in renamed and len(current.priorities) < MAX_PRIORITIES
+    )
+
+
+def run_ai(report: RunReport, findings: list[Finding], publish: Callable[[dict], None] | None = None) -> tuple[dict, str | None]:
+    """Explain the findings that reached the AI node.
+
+    `publish(output)` stores the current stage so the editor can show it while the
+    model works. An unavailable model is not a node failure: the findings still flow
+    to the next nodes, only without recommendations.
+    """
+    total = len(findings)
+    progress: dict = {"total": total}
+
+    def stage(name: str, **details):
+        progress.update(details, stage=name)  # keep earlier details, e.g. how many findings were sent
+        if publish:
+            publish(dict(progress))
+
+    try:
+        analysis = explain_findings(findings, load_llm() if findings else None, stage)
+    except LlmError as error:
+        return (
+            {"aiAvailable": False, "stage": "failed", "errorCode": error.code, "total": total},
+            f"AI unavailable: {error}",
         )
-    explained = len(analysis.recommendations)
-    output = {"aiAvailable": True, "explained": explained, "total": total}
-    if total > MAX_FINDINGS:
-        output["limit"] = MAX_FINDINGS
+
+    merge_analysis(report, analysis)
+    output = {"aiAvailable": True, "stage": "done", "explained": len(analysis.recommendations), "total": total}
+    groups = len(group_findings(findings))
+    if groups > MAX_GROUPS:
+        output["limit"] = MAX_GROUPS
     return output, None
 
 
@@ -123,7 +150,11 @@ def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, sourc
                 result.output = {"matched": matched}
                 handle = "true" if matched else "false"
             elif node.type == "ai":
-                result.output, result.error = run_ai(report, list(context.values()))
+                def publish(output: dict, result=result):
+                    result.output = output
+                    storage.save_run(report)
+
+                result.output, result.error = run_ai(report, list(context.values()), publish)
             result.status = "succeeded"
             active_contexts[node.id, handle] = list(context.values())
         except CatalogUnavailable as error:
