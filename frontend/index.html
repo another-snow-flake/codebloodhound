@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CodeBloodhound — редактор сценариев проверки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&display=swap">
+<style>
+:root{--bg:#eef1ea;--panel:#f8faf5;--card:#fff;--ink:#1d2b24;--mute:#68766d;--line:#d5dccf;--acc:#2f6b4f;--acc-ink:#fff;--grid:#dde3d6;
+--ok:#2f8a57;--run:#2d6cdf;--bad:#c2412d;--skip:#8a948d;--crit:#b3261e;--high:#d9622b;--med:#c79a14;--low:#5a8bb5;
+font-family:Onest,system-ui,sans-serif;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14201a;--panel:#1a2822;--card:#22332b;--ink:#e6efe8;--mute:#98a89e;--line:#2f4339;--acc:#6cc497;--acc-ink:#0f1c15;--grid:#1f3027;--ok:#5ec98a;--run:#7aa7ff;--bad:#f08c7a;--skip:#7c897f;--crit:#ff8b80;--high:#f2a06f;--med:#e5c24d;--low:#8fb9e0;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14201a;--panel:#1a2822;--card:#22332b;--ink:#e6efe8;--mute:#98a89e;--line:#2f4339;--acc:#6cc497;--acc-ink:#0f1c15;--grid:#1f3027;--ok:#5ec98a;--run:#7aa7ff;--bad:#f08c7a;--skip:#7c897f;--crit:#ff8b80;--high:#f2a06f;--med:#e5c24d;--low:#8fb9e0;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{background:var(--bg);color:var(--ink);font-size:14px;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.app{display:grid;grid-template-rows:auto auto 1fr;height:100%}
+header{display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+.btn{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 12px}
+.btn:hover{border-color:var(--acc)}
+.btn.pri{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);font-weight:600}
+.btn.ico{width:34px;padding:6px 0;text-align:center;font-size:16px}
+.brand{font-weight:700;font-size:16px;margin:0 10px 0 4px;letter-spacing:-.01em}
+.menu{position:relative}
+.menu .dd{position:absolute;top:100%;left:0;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:10px;min-width:200px;padding:4px;z-index:30;display:none;box-shadow:0 8px 24px rgba(0,0,0,.14)}
+.menu.open .dd{display:block}
+.dd button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 10px;border-radius:6px}
+.dd button:hover{background:var(--bg)}
+.sp{flex:1}
+.src{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--bg);flex-wrap:wrap}
+.src input[type=text]{flex:1;min-width:180px;max-width:380px;border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 10px}
+.src.need{box-shadow:inset 0 0 0 2px var(--bad)}
+.tag{padding:3px 9px;border-radius:99px;background:var(--card);border:1px solid var(--line);color:var(--mute);font-size:12.5px}
+.tag.ok{color:var(--ok);border-color:var(--ok)}
+main{display:grid;grid-template-columns:230px 1fr 330px;min-height:0;transition:grid-template-columns .2s}
+main.aic{grid-template-columns:230px 1fr 44px}
+aside{background:var(--panel);min-height:0;display:flex;flex-direction:column}
+#left{border-right:1px solid var(--line)}
+#right{border-left:1px solid var(--line)}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;border:0;background:none;padding:10px 6px;color:var(--mute);border-bottom:2px solid transparent}
+.tabs button.on{color:var(--ink);border-color:var(--acc);font-weight:600}
+.list{padding:10px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.cat{display:flex;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 10px}
+.cat:hover{border-color:var(--acc)}
+.cat small{display:block;color:var(--mute);font-size:12px}
+.dot{width:10px;height:10px;border-radius:3px;flex:none}
+.empty{color:var(--mute);padding:14px 4px;line-height:1.5}
+.wfi{display:flex;gap:6px}
+.wfi .cat{flex:1}
+.center{position:relative;display:grid;grid-template-rows:1fr auto;min-width:0;min-height:0}
+.canvas{overflow:auto;position:relative;background-color:var(--bg);background-image:radial-gradient(var(--grid) 1.3px,transparent 1.3px);background-size:22px 22px}
+.board{position:relative;width:1500px;height:900px}
+svg.edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+svg.edges path{fill:none;stroke:var(--mute);stroke-width:2;pointer-events:stroke;cursor:pointer}
+svg.edges path.on{stroke:var(--acc);stroke-width:3}
+svg.edges path.act{stroke:var(--ok)}
+svg.edges text{font-size:11px;fill:var(--mute)}
+.node{position:absolute;width:190px;height:72px;background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;cursor:grab;user-select:none;touch-action:none}
+.node.sel{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 25%,transparent)}
+.node b{display:block;font-size:13.5px;line-height:1.25}
+.node .st{margin-top:6px;font-size:12px;color:var(--mute);display:flex;align-items:center;gap:6px}
+.node .bar{position:absolute;left:0;top:10px;bottom:10px;width:4px;border-radius:0 4px 4px 0}
+.sdot{width:8px;height:8px;border-radius:50%;background:var(--skip)}
+.s-running .sdot{background:var(--run);animation:pl 1s infinite}
+.s-succeeded .sdot{background:var(--ok)}.s-failed .sdot{background:var(--bad)}.s-queued .sdot{background:var(--mute)}
+.node.s-failed{border-color:var(--bad)}.node.s-skipped{opacity:.55}
+@keyframes pl{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.s-running .sdot{animation:none}main{transition:none}}
+.h{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--card);border:2px solid var(--mute);cursor:crosshair}
+.h:hover{border-color:var(--acc);background:var(--acc)}
+.h.in{left:-8px;top:29px}.h.out{right:-8px;top:29px}
+.h.t{right:-8px;top:17px;border-color:var(--ok)}.h.f{right:-8px;top:43px;border-color:var(--bad)}
+.hint{position:absolute;left:16px;bottom:12px;color:var(--mute);font-size:12.5px;pointer-events:none}
+.insp{position:absolute;top:12px;right:12px;width:268px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.insp h3,.ph h3{margin:0 0 8px;font-size:14px}
+label.f{display:block;margin:8px 0 4px;color:var(--mute);font-size:12.5px}
+.insp select,.insp input,.modal select,.modal input[type=text],.modal input[type=password]{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:6px 8px}
+.note{color:var(--mute);font-size:12.5px;line-height:1.45;margin:6px 0 0}
+.rep{border-top:1px solid var(--line);background:var(--panel);max-height:42vh;display:flex;flex-direction:column;min-height:0}
+.rep.min .rb{display:none}
+.rh{display:flex;align-items:center;gap:10px;padding:8px 12px}
+.rh b{font-size:14px}
+.rb{overflow:auto;padding:0 12px 12px;display:grid;grid-template-columns:230px 1fr;gap:16px}
+.rb h4{margin:4px 0 6px;font-size:13px;color:var(--mute);font-weight:500}
+.nl div{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.nl small{color:var(--mute)}
+.fnd{width:100%;border-collapse:collapse;font-size:13px}
+.fnd td,.fnd th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.fnd th{color:var(--mute);font-weight:500}
+.fnd tr.pick{background:color-mix(in srgb,var(--acc) 14%,transparent)}
+.fnd tbody tr{cursor:pointer}
+.sev{font-weight:600}.sev.critical{color:var(--crit)}.sev.high{color:var(--high)}.sev.medium{color:var(--med)}.sev.low{color:var(--low)}
+.ph{padding:12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+.ph h3{margin:0;flex:1}
+main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
+.ab{padding:12px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:10px}
+.rec{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px;line-height:1.45}
+.rec.pick{border-color:var(--acc)}
+.rec b{display:block;margin-bottom:4px}
+.chat{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line)}
+.chat input{flex:1;min-width:0;border:1px solid var(--line);background:var(--card);border-radius:8px;padding:7px 10px}
+.msg{padding:8px 10px;border-radius:10px;background:var(--card);border:1px solid var(--line);font-size:13px;line-height:1.45}
+.msg.me{background:var(--acc);color:var(--acc-ink);align-self:flex-end;border-color:var(--acc)}
+.warn{border:1px solid var(--med);border-radius:10px;padding:8px 10px;font-size:13px;color:var(--ink);background:color-mix(in srgb,var(--med) 14%,transparent)}
+.ov{position:fixed;inset:0;background:rgba(10,20,15,.5);display:none;align-items:center;justify-content:center;z-index:50;padding:16px}
+.ov.open{display:flex}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(460px,100%);max-height:90vh;overflow:auto}
+.modal h2{margin:0 0 4px;font-size:18px}
+.modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.modal textarea{width:100%;height:280px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;z-index:60;display:none;max-width:90vw}
+.chk{display:flex;gap:8px;align-items:center;margin-top:10px}
+@media (max-width:900px){main,main.aic{grid-template-columns:1fr}#left,#right{display:none}.insp{width:230px}.rb{grid-template-columns:1fr}.brand{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+<header>
+  <button class="btn ico" id="gear" title="Настройки LLM и уведомлений" aria-label="Настройки">⚙</button>
+  <span class="brand">CodeBloodhound</span>
+  <div class="menu" id="fileMenu">
+    <button class="btn" id="fileBtn" aria-haspopup="true">Файл</button>
+    <div class="dd">
+      <button data-a="new">Новый сценарий</button>
+      <button data-a="save">Сохранить в «Мои сценарии»</button>
+      <button data-a="dl">Скачать (JSON)</button>
+    </div>
+  </div>
+  <input id="wfName" class="btn" style="width:210px" aria-label="Название сценария" value="Проверка секретов">
+  <span class="sp"></span>
+  <button class="btn" id="theme" aria-label="Тема" title="Тема">◐</button>
+  <span class="tag" id="apiTag">проверяю связь…</span>
+  <button class="btn pri" id="runBtn">Запустить</button>
+</header>
+<div class="src" id="src">
+  <b>Проект:</b>
+  <span class="note" style="margin:0">ZIP-архив до 10 МиБ. Загрузка по ссылке пока не поддерживается.</span><span class="sp"></span>
+  <label class="btn" for="fileIn" style="cursor:pointer">Выбрать ZIP</label>
+  <input type="file" id="fileIn" accept=".zip" hidden>
+  <button class="btn" id="upBtn">Загрузить</button>
+  <span class="tag" id="srcTag">источник не выбран</span>
+</div>
+<main id="main">
+  <aside id="left">
+    <div class="tabs"><button class="on" data-t="cat">Каталог нод</button><button data-t="my">Мои сценарии</button></div>
+    <div class="list" id="leftList"></div>
+  </aside>
+  <section class="center">
+    <div class="canvas" id="canvas"><div class="board" id="board">
+      <svg class="edges" id="edges"></svg>
+    </div>
+    <div class="hint">Потяните от правой точки ноды к левой точке следующей. Delete удаляет выбранное.</div></div>
+    <div class="rep min" id="rep">
+      <div class="rh"><b>Отчёт о запуске</b><span class="tag" id="repTag">запусков ещё не было</span><span class="sp"></span><button class="btn" id="repToggle">Развернуть</button></div>
+      <div class="rb" id="repBody"></div>
+    </div>
+  </section>
+  <aside id="right">
+    <div class="ph"><h3>AI-панель</h3><span class="tag" id="llmTag"></span><button class="btn ico" id="aiToggle" aria-label="Свернуть AI-панель">⇥</button></div>
+    <div class="ab" id="aiBody"></div>
+    <div class="chat ab-chat"><input id="chatIn" placeholder="Вопрос по отчёту…" aria-label="Вопрос по отчёту"><button class="btn pri" id="chatBtn">Спросить</button></div>
+  </aside>
+</main>
+</div>
+
+<div class="ov" id="ovSet"><div class="modal">
+  <h2>Настройки</h2><p class="note">Адрес бэкенда. Страницу нужно открывать с http://localhost:5173 или :3000, иначе бэкенд отклонит запросы (CORS).</p>
+  <label class="f">Адрес API</label><input type="text" id="apiUrl" placeholder="http://127.0.0.1:8000">
+  <p class="note">Настройки LLM и webhook появятся, когда бэкенд добавит для них эндпоинты. Ключи хранятся только на бэкенде.</p>
+  <div class="row"><button class="btn" data-close>Закрыть</button><button class="btn pri" id="setSave">Сохранить и проверить</button></div>
+</div></div>
+
+<div class="ov" id="ovJson"><div class="modal" style="width:min(640px,100%)">
+  <h2>Схема сценария (JSON)</h2><p class="note">Формат совпадает с контрактом <code>Workflow</code>.</p>
+  <textarea id="jsonOut" readonly></textarea>
+  <div class="row"><button class="btn" id="jsonCopy">Копировать</button><button class="btn pri" id="jsonDownload">Скачать</button><button class="btn" data-close>Закрыть</button></div>
+</div></div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const T={trigger:{n:"Запуск",d:"Ручной запуск",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Ветвление по критичности",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
+const SUPPORTED=new Set(["trigger","secrets","condition"]); // что сейчас умеет исполнять бэкенд
+const SEV=["low","medium","high","critical"],SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
+const RULES={"hardcoded-secret":"Секрет в коде"};
+const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Бэкенд пока запускает только ручной режим.",invalid_node_config:"Заполните настройки условия: нужна минимальная критичность.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
+const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+let API=ls.get("cg_api")||"http://127.0.0.1:8000";
+async function api(path,opt){let r;
+  try{r=await fetch(API+path,opt)}catch(e){throw{code:"network",message:`Нет связи с бэкендом (${API}). Проверьте, что uvicorn запущен и страница открыта с http://localhost:5173 или :3000: другие адреса бэкенд не пускает (CORS).`}}
+  let b=null;try{b=await r.json()}catch(e){}
+  if(!r.ok){let m=ERR[b?.code]||b?.message||"Ошибка "+r.status;
+    if(b?.code==="unsupported_node"){const t=/The (\w+) node/.exec(b.message||"")?.[1];m=`Нода «${T[t]?.n||t}» пока не выполняется бэкендом. Уберите её из сценария, чтобы запустить.`}
+    throw{code:b?.code||"http_"+r.status,message:m}}
+  return b}
+const JH={"Content-Type":"application/json"};
+let wf={id:"",name:"Поиск секретов",nodes:[],edges:[]};
+let sel=null,sourceId=null,report=null,pick=null,running=false,uid=1;
+const nid=()=>{let i;do{i="n"+uid++}while(wf.nodes.some(n=>n.id===i));return i};
+const eid=()=>"e"+Math.random().toString(36).slice(2,9);
+function mk(type,x,y,config){return{id:nid(),type,position:{x,y},config:config||{}}}
+function init(){const a=mk("trigger",40,120,{mode:"manual"});wf.nodes=[a];const b=mk("secrets",270,120);wf.nodes.push(b);const c=mk("condition",500,120,{minSeverity:"high"});wf.nodes.push(c);
+  wf.edges=[[a,b],[b,c]].map(([s,t])=>({id:eid(),source:s.id,target:t.id}))}
+function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";clearTimeout(toast.h);toast.h=setTimeout(()=>t.style.display="none",5000)}
+const fail=e=>toast(e.message||"Что-то пошло не так");
+const stLabel=s=>({queued:"в очереди",running:"выполняется",succeeded:"готово",failed:"ошибка",skipped:"пропущена"}[s]);
+function render(){
+  const bd=$("#board");bd.querySelectorAll(".node").forEach(e=>e.remove());
+  for(const n of wf.nodes){const t=T[n.type],e=document.createElement("div");e.className="node";e.dataset.id=n.id;
+    const s=report?.nodes.find(x=>x.nodeId===n.id)?.status;if(s)e.classList.add("s-"+s);
+    e.innerHTML=`<span class="bar" style="background:${t.c}"></span><b>${t.n}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается"}</div>`+
+    (n.type!=="trigger"?`<span class="h in" data-in="${esc(n.id)}" title="Вход"></span>`:"")+
+    (n.type==="condition"?`<span class="h t" data-out="${esc(n.id)}" data-hd="true" title="Выход «да»"></span><span class="h f" data-out="${esc(n.id)}" data-hd="false" title="Выход «нет»"></span>`:`<span class="h out" data-out="${esc(n.id)}" title="Выход"></span>`);
+    if(sel?.t==="n"&&sel.id===n.id)e.classList.add("sel");
+    e.style.left=n.position.x+"px";e.style.top=n.position.y+"px";bd.appendChild(e)}
+  edges();inspector()}
+function pt(n,out,h){const p=n.position;return out?[p.x+190,p.y+(n.type==="condition"?(h==="true"?24:50):36)]:[p.x,p.y+36]}
+function edges(tmp){const sv=$("#edges");let h="";
+  for(const e of wf.edges){const a=wf.nodes.find(n=>n.id===e.source),b=wf.nodes.find(n=>n.id===e.target);if(!a||!b)continue;
+    const[x1,y1]=pt(a,1,e.sourceHandle),[x2,y2]=pt(b,0),dx=Math.max(40,(x2-x1)/2);
+    const act=report&&report.nodes.find(x=>x.nodeId===e.target)?.status==="succeeded";
+    h+=`<path data-e="${esc(e.id)}" class="${sel?.t==="e"&&sel.id===e.id?"on":""} ${act?"act":""}" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}"/>`;
+    if(e.sourceHandle)h+=`<text x="${x1+8}" y="${y1-6}">${e.sourceHandle==="true"?"да":"нет"}</text>`}
+  if(tmp)h+=`<path d="M${tmp[0]},${tmp[1]} L${tmp[2]},${tmp[3]}" style="stroke-dasharray:5 4;pointer-events:none"/>`;sv.innerHTML=h}
+function cycle(s,t){const seen=new Set();const go=id=>{if(id===s)return true;if(seen.has(id))return false;seen.add(id);return wf.edges.filter(e=>e.source===id).some(e=>go(e.target))};return go(t)}
+const bd=$("#board");
+bd.addEventListener("pointerdown",ev=>{
+  const o=ev.target.closest("[data-out]"),nd=ev.target.closest(".node");const r=bd.getBoundingClientRect();
+  if(o){ev.preventDefault();const src=wf.nodes.find(n=>n.id===o.dataset.out),hd=o.dataset.hd,[x1,y1]=pt(src,1,hd);
+    const mv=e=>edges([x1,y1,e.clientX-r.left,e.clientY-r.top]);
+    const up=e=>{removeEventListener("pointermove",mv);removeEventListener("pointerup",up);edges();
+      const t=document.elementFromPoint(e.clientX,e.clientY)?.closest("[data-in]");if(!t)return;const tid=t.dataset.in;
+      if(tid===src.id)return toast("Нельзя соединить ноду с самой собой");
+      if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&x.sourceHandle===hd))return toast("Такая связь уже есть");
+      if(cycle(src.id,tid))return toast("Циклы запрещены: связь замкнёт сценарий");
+      wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{})});report=null;render()};
+    addEventListener("pointermove",mv);addEventListener("pointerup",up);return}
+  if(nd&&!ev.target.closest("[data-in]")){const n=wf.nodes.find(x=>x.id===nd.dataset.id);sel={t:"n",id:n.id};
+    const ox=ev.clientX-n.position.x,oy=ev.clientY-n.position.y;
+    const mv=e=>{n.position.x=Math.max(0,Math.round(e.clientX-ox));n.position.y=Math.max(0,Math.round(e.clientY-oy));nd.style.left=n.position.x+"px";nd.style.top=n.position.y+"px";edges()};
+    const up=()=>{removeEventListener("pointermove",mv);removeEventListener("pointerup",up);render()};
+    addEventListener("pointermove",mv);addEventListener("pointerup",up);document.querySelectorAll(".node.sel").forEach(x=>x.classList.remove("sel"));nd.classList.add("sel");inspector();return}
+  const ep=ev.target.closest("[data-e]");if(ep){sel={t:"e",id:ep.dataset.e};render();return}
+  sel=null;render()});
+addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
+function del(){if(!sel)return;if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;report=null;render()}
+function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
+  const box=document.createElement("div");box.className="insp";let h="";
+  if(sel.t==="e")h=`<h3>Связь</h3><p class="note">Выбранную связь можно удалить.</p><button class="btn" id="delSel" style="margin-top:8px">Удалить связь</button>`;
+  else{const n=wf.nodes.find(x=>x.id===sel.id),c=n.config;h=`<h3>${T[n.type].n}</h3>`;
+    if(n.type==="trigger")h+=`<label class="f">Режим</label><select data-k="mode"><option value="manual">Вручную</option><option value="schedule" disabled>По расписанию (скоро)</option></select><p class="note">Источник берётся из панели «Проект».</p>`;
+    else if(n.type==="condition")h+=`<label class="f">Если есть находка не ниже</label><select data-k="minSeverity">${SEV.map(s=>`<option value="${s}">${SEVRU[s]}</option>`).join("")}</select><p class="note">Выход «да» срабатывает при совпадении, иначе «нет». Сравнения и regex появятся позже.</p>`;
+    else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в .kt, .kts, .java, .properties, .yml, .json, .toml и .env. Значения секретов в отчёт не попадают.</p>`;
+    else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
+    h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
+  box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
+  box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id);el.value=n.config[el.dataset.k]??(el.dataset.k==="minSeverity"?"high":"manual");
+    if(el.dataset.k==="minSeverity"&&!n.config.minSeverity)n.config.minSeverity="high";
+    el.onchange=()=>{n.config[el.dataset.k]=el.value}});
+  $("#delSel").onclick=del}
+// левая панель
+let tab="cat";
+function left(){const l=$("#leftList");
+  if(tab==="my")return loadMy();
+  l.innerHTML=Object.entries(T).map(([k,t])=>`<button class="cat" data-add="${k}"><span class="dot" style="background:${t.c}"></span><span>${t.n}<small>${t.d}${SUPPORTED.has(k)?"":" (пока черновик)"}</small></span></button>`).join("");
+  l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{const k=b.dataset.add;if(k==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
+    const n=mk(k,60+(wf.nodes.length%5)*30,260+(wf.nodes.length%4)*50,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:{});wf.nodes.push(n);sel={t:"n",id:n.id};render()})}
+async function loadMy(){const l=$("#leftList");l.innerHTML=`<div class="empty">Загрузка…</div>`;
+  try{const list=await api("/workflows");
+    l.innerHTML=`<p class="note" style="margin:0 0 4px">Общее рабочее пространство: сценарии видны всей команде.</p>`+(list.length?list.map((s,i)=>`<button class="cat" data-i="${i}">${esc(s.name)}</button>`).join(""):`<div class="empty">Сохранённых сценариев пока нет. Откройте «Файл» → «Сохранить».</div>`);
+    l.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});$("#wfName").value=wf.name;report=null;sel=null;render();renderRep();renderAI()})}
+  catch(e){l.innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));left()});
+// сохранение
+async function save(){wf.name=$("#wfName").value.trim()||"Без названия";
+  const r=await api(wf.id?"/workflows/"+wf.id:"/workflows",{method:wf.id?"PUT":"POST",headers:JH,body:JSON.stringify({name:wf.name,nodes:wf.nodes,edges:wf.edges})});wf.id=r.id;return r}
+$("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("open")};
+addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
+$("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a;
+  if(a==="new"){wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};$("#wfName").value=wf.name;report=null;sel=null;render();renderRep();renderAI()}
+  if(a==="dl"){const{id,...d}=wf;d.name=$("#wfName").value;$("#jsonOut").value=JSON.stringify(d,null,2);$("#ovJson").classList.add("open")}
+  if(a==="save"){try{await save();toast("Сценарий сохранён");if(tab==="my")left()}catch(e){fail(e)}}});
+$("#jsonCopy").onclick=async()=>{try{await navigator.clipboard.writeText($("#jsonOut").value);toast("JSON скопирован")}catch(e){$("#jsonOut").select();toast("Выделено — скопируйте вручную")}};
+$("#jsonDownload").onclick=()=>{
+  const url=URL.createObjectURL(new Blob([$("#jsonOut").value],{type:"application/json"}));
+  const link=document.createElement("a");link.href=url;link.download="workflow.json";link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000)
+};
+document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>b.closest(".ov").classList.remove("open"));
+// связь с бэкендом и настройки
+async function ping(){const t=$("#apiTag");try{await api("/health");t.textContent="бэкенд на связи";t.classList.add("ok");return true}catch(e){t.textContent="нет связи с бэкендом";t.classList.remove("ok");return false}}
+$("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open")};
+$("#setSave").onclick=async()=>{API=$("#apiUrl").value.trim().replace(/\/+$/,"")||"http://127.0.0.1:8000";ls.set("cg_api",API);$("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
+$("#theme").onclick=()=>{const d=document.documentElement,dark=d.dataset.theme?d.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;d.dataset.theme=dark?"light":"dark"};
+$("#aiToggle").onclick=()=>{$("#main").classList.toggle("aic");$("#aiToggle").textContent=$("#main").classList.contains("aic")?"⇤":"⇥"};
+// источник
+$("#fileIn").onchange=()=>{
+  sourceId=null;
+  const f=$("#fileIn").files[0];
+  $("#srcTag").textContent=f?"выбран: "+f.name:"источник не выбран";
+  $("#srcTag").classList.remove("ok")
+};
+$("#upBtn").onclick=async()=>{const f=$("#fileIn").files[0];
+  if(!f)return toast("Выберите ZIP-архив с учебным проектом");
+  if(!/\.zip$/i.test(f.name))return toast("Поддерживается только ZIP");
+  if(f.size>10*1024*1024)return toast(ERR.upload_too_large);
+  const fd=new FormData();fd.append("file",f);$("#upBtn").disabled=true;
+  try{const r=await api("/sources",{method:"POST",body:fd});if($("#fileIn").files[0]!==f)return;sourceId=r.sourceId;$("#srcTag").textContent="загружен: "+f.name;$("#srcTag").classList.add("ok");$("#src").classList.remove("need");toast("Проект загружен")}
+  catch(e){fail(e)}finally{$("#upBtn").disabled=false}};
+// запуск
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length!==1)return"В сценарии должен быть ровно один запуск";
+  if(wf.nodes.some(n=>n.type!=="trigger"&&!wf.edges.some(e=>e.target===n.id)))return"У одной из нод нет входящей связи";
+  const bad=wf.nodes.filter(n=>!SUPPORTED.has(n.type));if(bad.length)return`Нода «${T[bad[0].type].n}» пока не выполняется бэкендом. Уберите её, чтобы запустить сценарий.`;
+  if(wf.nodes.some(n=>n.type==="condition"&&!n.config.minSeverity))return ERR.invalid_node_config;return null}
+$("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)return toast(err);
+  if(!sourceId){$("#src").classList.add("need");return toast("Сначала загрузите проект: ZIP-архив")}
+  running=true;$("#runBtn").disabled=true;$("#runBtn").textContent="Идёт запуск…";pick=null;
+  try{await save();
+    const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId})});
+    report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};openRep();render();renderRep();
+    for(let i=0;i<150;i++){await wait(800);report=await api("/runs/"+r.runId);report.findings=report.findings||[];render();renderRep();if(report.status==="succeeded"||report.status==="failed")break}
+    if(report.status==="running"||report.status==="queued")toast("Запуск идёт дольше обычного. Откройте отчёт позже: "+r.runId)}
+  catch(e){fail(e)}
+  finally{running=false;$("#runBtn").disabled=false;$("#runBtn").textContent="Запустить";render();renderRep();renderAI()}};
+// отчёт
+function openRep(){$("#rep").classList.remove("min");$("#repToggle").textContent="Свернуть"}
+$("#repToggle").onclick=()=>{$("#rep").classList.toggle("min");$("#repToggle").textContent=$("#rep").classList.contains("min")?"Развернуть":"Свернуть"};
+function nodeNote(n,s){if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
+  const o=s.output;if(!o)return"";if(n.type==="secrets")return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
+function renderRep(){const b=$("#repBody");if(!report){$("#repTag").textContent="запусков ещё не было";b.innerHTML=`<div class="empty">Загрузите проект и нажмите «Запустить» — здесь появятся статусы нод и находки.</div>`;return}
+  $("#repTag").textContent=report.runId.slice(0,8)+" · "+stLabel(report.status);
+  const fs=report.findings||[];
+  b.innerHTML=`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{const n=wf.nodes.find(x=>x.id===s.nodeId);return n?`<div><span>${T[n.type].n}${nodeNote(n,s)}</span><small>${stLabel(s.status)}</small></div>`:""}).join("")}</div></div>
+  <div><h4>Находки (${fs.length})</h4>${fs.length?`<table class="fnd"><thead><tr><th>Критичность</th><th>Правило</th><th>Файл</th><th>Описание</th></tr></thead><tbody>${fs.map(f=>`<tr data-f="${esc(f.id)}" class="${pick===f.id?"pick":""}"><td class="sev ${f.severity}">${SEVRU[f.severity]}</td><td>${esc(RULES[f.ruleId]||f.ruleId)}${f.cve?`<br><small>${esc(f.cve)}</small>`:""}</td><td>${esc(f.file)}${f.line?":"+f.line:""}</td><td>${esc(f.message)}</td></tr>`).join("")}</tbody></table>`:`<div class="empty">${report.status==="succeeded"?"Находок нет: проверка прошла успешно.":"Идёт проверка…"}</div>`}</div>`;
+  b.querySelectorAll("[data-f]").forEach(r=>r.onclick=()=>{pick=r.dataset.f;renderRep();renderAI()})}
+// AI-панель: на бэкенде AI пока нет, панель показывает аналитику, когда она появится в отчёте
+function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;$("#llmTag").textContent="LLM не подключён";
+  if(!a){b.innerHTML=`<div class="empty">AI-рекомендации и чат появятся, когда бэкенд подключит ноду «AI-рекомендации». Находки уже видны в отчёте.</div>`;return}
+  b.innerHTML=`<div class="rec"><b>Итог</b>${esc(a.summary)}</div>`+a.recommendations.map(r=>{const f=(report.findings||[]).find(x=>x.id===r.findingId);return f?`<div class="rec ${pick===f.id?"pick":""}"><b>${esc(f.file)}${f.line?":"+f.line:""}</b>${esc(r.explanation)}<br><br><i>Что сделать:</i> ${esc(r.remediation)}</div>`:""}).join("")}
+$("#chatIn").disabled=$("#chatBtn").disabled=true;$("#chatIn").placeholder="Чат появится вместе с AI на бэкенде";
+$("#wfName").oninput=e=>wf.name=e.target.value;
+init();left();render();renderRep();renderAI();ping();
+</script>
+</body>
+</html>
