@@ -8,8 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from .ai import answer_report_question
+from .llm import LlmError, load_llm
 from .runner import execute_plan, plan_run, validate_edges
-from .schemas import ApiProblem, NodeResult, RunCreated, RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft
+from .schemas import (
+    ApiProblem, NodeResult, RunChatRequest, RunChatResponse, RunCreated,
+    RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
+)
 from .sources import MAX_UPLOAD, validate_zip
 from .storage import Storage, database_url
 
@@ -115,6 +120,21 @@ def create_app(dsn: str | None = None) -> FastAPI:
         if report is None:
             raise ApiProblem(404, "run_not_found", "Run not found.")
         return report
+
+    @app.post("/runs/{run_id}/chat")
+    def chat_about_run(run_id: str, request: RunChatRequest) -> RunChatResponse:
+        report = get_run(run_id)
+        if report.status not in ("succeeded", "failed"):
+            raise ApiProblem(409, "run_in_progress", "Wait for the workflow to finish before asking a question.")
+        try:
+            reply = answer_report_question(report.findings, request.question, request.history, load_llm())
+        except LlmError as error:
+            status = {
+                "not_configured": 503, "bad_config": 503, "connection_error": 503,
+                "rate_limited": 429, "timeout": 504,
+            }.get(error.code, 502)
+            raise ApiProblem(status, error.code, str(error)) from None
+        return RunChatResponse(answer=reply)
 
     return app
 

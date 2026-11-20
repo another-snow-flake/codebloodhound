@@ -38,7 +38,7 @@ header{display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(-
 .src.need{box-shadow:inset 0 0 0 2px var(--bad)}
 .tag{padding:3px 9px;border-radius:99px;background:var(--card);border:1px solid var(--line);color:var(--mute);font-size:12.5px}
 .tag.ok{color:var(--ok);border-color:var(--ok)}
-main{display:grid;grid-template-columns:230px 1fr 330px;min-height:0;transition:grid-template-columns .2s}
+main{position:relative;display:grid;grid-template-columns:230px 1fr 330px;min-height:0;transition:grid-template-columns .2s}
 main.aic{grid-template-columns:230px 1fr 44px}
 aside{background:var(--panel);min-height:0;display:flex;flex-direction:column}
 #left{border-right:1px solid var(--line)}
@@ -109,14 +109,18 @@ label.f{display:block;margin:8px 0 4px;color:var(--mute);font-size:12.5px}
 .finding-item span{display:block;margin-top:4px;font-size:12px;color:var(--mute)}
 .ph{padding:12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
 .ph h3{margin:0;flex:1}
-main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
+main.aic #right .ab,main.aic #right .chat{display:none}
+main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
+#mobileAI{display:none}
 .ab{padding:12px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:10px}
+.ai-results,.chat-log{display:flex;flex-direction:column;gap:10px}
+.chat-log:empty{display:none}
 .rec{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px;line-height:1.45}
 .rec.pick{border-color:var(--acc)}
 .rec b{display:block;margin-bottom:4px}
 .chat{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line)}
 .chat input{flex:1;min-width:0;border:1px solid var(--line);background:var(--card);border-radius:8px;padding:7px 10px}
-.msg{padding:8px 10px;border-radius:10px;background:var(--card);border:1px solid var(--line);font-size:13px;line-height:1.45}
+.msg{padding:8px 10px;border-radius:10px;background:var(--card);border:1px solid var(--line);font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
 .msg.me{background:var(--acc);color:var(--acc-ink);align-self:flex-end;border-color:var(--acc)}
 .warn{border:1px solid var(--med);border-radius:10px;padding:8px 10px;font-size:13px;color:var(--ink);background:color-mix(in srgb,var(--med) 14%,transparent)}
 .ov{position:fixed;inset:0;background:rgba(10,20,15,.5);display:none;align-items:center;justify-content:center;z-index:50;padding:16px}
@@ -127,7 +131,17 @@ main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag
 .modal textarea{width:100%;height:280px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
 .toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;z-index:60;display:none;max-width:90vw}
 .chk{display:flex;gap:8px;align-items:center;margin-top:10px}
-@media (max-width:900px){main,main.aic{grid-template-columns:1fr}#left,#right{display:none}.insp{width:230px}.rb{grid-template-columns:minmax(0,1fr)}.brand{display:none}}
+@media (max-width:900px){
+  header{flex-wrap:wrap}
+  main,main.aic{grid-template-columns:minmax(0,1fr)}
+  #left,#right,.brand,#aiToggle{display:none}
+  #mobileAI{display:block}
+  main.mobile-ai #right{display:flex;position:absolute;inset:0 0 0 auto;width:min(100%,360px);z-index:20}
+  main.mobile-ai #right .ab,main.mobile-ai #right .chat{display:flex}
+  main.mobile-ai #right .ph h3,main.mobile-ai #right .ph .tag{display:block}
+  .insp{width:230px}
+  .rb{grid-template-columns:minmax(0,1fr)}
+}
 </style>
 </head>
 <body>
@@ -146,6 +160,7 @@ main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag
   <input id="wfName" class="btn" style="width:210px" aria-label="Название сценария" value="Проверка секретов">
   <span class="sp"></span>
   <button class="btn" id="theme" aria-label="Тема" title="Тема">◐</button>
+  <button class="btn" id="mobileAI" aria-controls="right" aria-expanded="false">AI-чат</button>
   <span class="tag" id="apiTag">проверяю связь…</span>
   <button class="btn pri" id="runBtn">Запустить</button>
 </header>
@@ -174,8 +189,14 @@ main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag
   </section>
   <aside id="right">
     <div class="ph"><h3>AI-панель</h3><span class="tag" id="llmTag"></span><button class="btn ico" id="aiToggle" aria-label="Свернуть AI-панель">⇥</button></div>
-    <div class="ab" id="aiBody"></div>
-    <div class="chat ab-chat"><input id="chatIn" placeholder="Вопрос по отчёту…" aria-label="Вопрос по отчёту"><button class="btn pri" id="chatBtn">Спросить</button></div>
+    <div class="ab">
+      <div id="aiBody" class="ai-results"></div>
+      <div id="chatLog" class="chat-log" role="log" aria-label="Чат по отчёту"></div>
+    </div>
+    <form class="chat ab-chat" id="reportChat">
+      <input id="chatIn" placeholder="Вопрос по отчёту…" aria-label="Вопрос по отчёту" maxlength="2000">
+      <button type="submit" class="btn pri" id="chatBtn">Спросить</button>
+    </form>
   </aside>
 </main>
 </div>
@@ -183,7 +204,7 @@ main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag
 <div class="ov" id="ovSet"><div class="modal">
   <h2>Настройки</h2><p class="note">Адрес бэкенда. Страницу нужно открывать с http://localhost:5173 или :3000, иначе бэкенд отклонит запросы (CORS).</p>
   <label class="f">Адрес API</label><input type="text" id="apiUrl" placeholder="http://127.0.0.1:8000">
-  <p class="note">Настройки LLM и webhook появятся, когда бэкенд добавит для них эндпоинты. Ключи хранятся только на бэкенде.</p>
+  <p class="note">DeepSeek и локальная модель настраиваются в окружении бэкенда. Настройки webhook появятся позже.</p>
   <div class="row"><button class="btn" data-close>Закрыть</button><button class="btn pri" id="setSave">Сохранить и проверить</button></div>
 </div></div>
 
@@ -197,7 +218,7 @@ main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag
 <script>
 const T={trigger:{n:"Запуск",d:"Ручной запуск",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Ветвление по критичности",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
 const SCANNERS=new Set(["secrets","sca","sast"]);
-const SUPPORTED=new Set(["trigger","condition",...SCANNERS]);
+const SUPPORTED=new Set(["trigger","condition","ai",...SCANNERS]);
 const SEV=["low","medium","high","critical"],SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
 const REPORT_LEVELS={critical:"Критические",high:"Высокие",medium:"Средние",low:"Низкие"};
 const RULES={
@@ -208,6 +229,19 @@ const RULES={
   "credentialed-cors":"Широкий CORS с учётными данными",
   "route-authorization":"Проверка доступа к маршруту",
   "object-authorization":"Проверка доступа к объекту"
+};
+const LLM_ERRORS={
+  not_configured:"Модель не настроена на бэкенде.",
+  bad_config:"Проверьте настройки модели на бэкенде.",
+  auth_error:"Провайдер отклонил ключ API.",
+  billing_error:"На аккаунте провайдера недостаточно средств.",
+  rate_limited:"Провайдер ограничил частоту запросов. Попробуйте позже.",
+  timeout:"Модель не ответила вовремя.",
+  connection_error:"Не удалось подключиться к модели.",
+  invalid_response:"Модель вернула некорректный ответ.",
+  incomplete_response:"Модель не закончила ответ.",
+  run_in_progress:"Дождитесь завершения проверки.",
+  http_error:"Эта версия бэкенда не поддерживает чат по отчёту."
 };
 const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Бэкенд пока запускает только ручной режим.",invalid_node_config:"Заполните настройки условия: нужна минимальная критичность.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -252,6 +286,7 @@ function edges(tmp){const sv=$("#edges");let h="";
 function cycle(s,t){const seen=new Set();const go=id=>{if(id===s)return true;if(seen.has(id))return false;seen.add(id);return wf.edges.filter(e=>e.source===id).some(e=>go(e.target))};return go(t)}
 const bd=$("#board");
 bd.addEventListener("pointerdown",ev=>{
+  if(running)return;
   const o=ev.target.closest("[data-out]"),nd=ev.target.closest(".node");const r=bd.getBoundingClientRect();
   if(o){ev.preventDefault();const src=wf.nodes.find(n=>n.id===o.dataset.out),hd=o.dataset.hd,[x1,y1]=pt(src,1,hd);
     const mv=e=>edges([x1,y1,e.clientX-r.left,e.clientY-r.top]);
@@ -260,7 +295,7 @@ bd.addEventListener("pointerdown",ev=>{
       if(tid===src.id)return toast("Нельзя соединить ноду с самой собой");
       if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&x.sourceHandle===hd))return toast("Такая связь уже есть");
       if(cycle(src.id,tid))return toast("Циклы запрещены: связь замкнёт сценарий");
-      wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{})});report=null;render()};
+      wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{})});clearReport()};
     addEventListener("pointermove",mv);addEventListener("pointerup",up);return}
   if(nd&&!ev.target.closest("[data-in]")){const n=wf.nodes.find(x=>x.id===nd.dataset.id);sel={t:"n",id:n.id};
     const ox=ev.clientX-n.position.x,oy=ev.clientY-n.position.y;
@@ -270,7 +305,8 @@ bd.addEventListener("pointerdown",ev=>{
   const ep=ev.target.closest("[data-e]");if(ep){sel={t:"e",id:ep.dataset.e};render();return}
   sel=null;render()});
 addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
-function del(){if(!sel)return;if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;report=null;render()}
+function clearReport(){report=null;pick=null;render();renderRep();renderAI()}
+function del(){if(!sel||running)return;if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
 function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
   const box=document.createElement("div");box.className="insp";let h="";
   if(sel.t==="e")h=`<h3>Связь</h3><p class="note">Выбранную связь можно удалить.</p><button class="btn" id="delSel" style="margin-top:8px">Удалить связь</button>`;
@@ -286,19 +322,20 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
   box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
   box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id);el.value=n.config[el.dataset.k]??(el.dataset.k==="minSeverity"?"high":"manual");
     if(el.dataset.k==="minSeverity"&&!n.config.minSeverity)n.config.minSeverity="high";
-    el.onchange=()=>{n.config[el.dataset.k]=el.value}});
+    el.disabled=running;
+    el.onchange=()=>{n.config[el.dataset.k]=el.value;clearReport()}});
   $("#delSel").onclick=del}
 // левая панель
 let tab="cat";
 function left(){const l=$("#leftList");
   if(tab==="my")return loadMy();
   l.innerHTML=Object.entries(T).map(([k,t])=>`<button class="cat" data-add="${k}"><span class="dot" style="background:${t.c}"></span><span>${t.n}<small>${t.d}${SUPPORTED.has(k)?"":" (пока черновик)"}</small></span></button>`).join("");
-  l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{const k=b.dataset.add;if(k==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
-    const n=mk(k,60+(wf.nodes.length%5)*30,260+(wf.nodes.length%4)*50,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:{});wf.nodes.push(n);sel={t:"n",id:n.id};render()})}
+  l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{if(running)return toast("Дождитесь завершения проверки");const k=b.dataset.add;if(k==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
+    const n=mk(k,60+(wf.nodes.length%5)*30,260+(wf.nodes.length%4)*50,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:{});wf.nodes.push(n);sel={t:"n",id:n.id};clearReport()})}
 async function loadMy(){const l=$("#leftList");l.innerHTML=`<div class="empty">Загрузка…</div>`;
   try{const list=await api("/workflows");
     l.innerHTML=`<p class="note" style="margin:0 0 4px">Общее рабочее пространство: сценарии видны всей команде.</p>`+(list.length?list.map((s,i)=>`<button class="cat" data-i="${i}">${esc(s.name)}</button>`).join(""):`<div class="empty">Сохранённых сценариев пока нет. Откройте «Файл» → «Сохранить».</div>`);
-    l.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});$("#wfName").value=wf.name;report=null;sel=null;render();renderRep();renderAI()})}
+    l.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{if(running)return toast("Дождитесь завершения проверки");wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});$("#wfName").value=wf.name;sel=null;clearReport()})}
   catch(e){l.innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));left()});
 // сохранение
@@ -307,7 +344,8 @@ async function save(){wf.name=$("#wfName").value.trim()||"Без названи�
 $("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("open")};
 addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
 $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a;
-  if(a==="new"){wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};$("#wfName").value=wf.name;report=null;sel=null;render();renderRep();renderAI()}
+  if(running&&a!=="dl")return toast("Дождитесь завершения проверки");
+  if(a==="new"){wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};$("#wfName").value=wf.name;sel=null;clearReport()}
   if(a==="dl"){const{id,...d}=wf;d.name=$("#wfName").value;$("#jsonOut").value=JSON.stringify(d,null,2);$("#ovJson").classList.add("open")}
   if(a==="save"){try{await save();toast("Сценарий сохранён");if(tab==="my")left()}catch(e){fail(e)}}});
 $("#jsonCopy").onclick=async()=>{try{await navigator.clipboard.writeText($("#jsonOut").value);toast("JSON скопирован")}catch(e){$("#jsonOut").select();toast("Выделено — скопируйте вручную")}};
@@ -322,13 +360,22 @@ async function ping(){const t=$("#apiTag");try{await api("/health");t.textConten
 $("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open")};
 $("#setSave").onclick=async()=>{API=$("#apiUrl").value.trim().replace(/\/+$/,"")||"http://127.0.0.1:8000";ls.set("cg_api",API);$("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
 $("#theme").onclick=()=>{const d=document.documentElement,dark=d.dataset.theme?d.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;d.dataset.theme=dark?"light":"dark"};
-$("#aiToggle").onclick=()=>{$("#main").classList.toggle("aic");$("#aiToggle").textContent=$("#main").classList.contains("aic")?"⇤":"⇥"};
+$("#aiToggle").onclick=()=>{
+  const collapsed=$("#main").classList.toggle("aic");
+  $("#aiToggle").textContent=collapsed?"⇤":"⇥";
+  $("#aiToggle").setAttribute("aria-label",collapsed?"Развернуть AI-панель":"Свернуть AI-панель")
+};
+$("#mobileAI").onclick=()=>{
+  const opened=$("#main").classList.toggle("mobile-ai");
+  $("#mobileAI").setAttribute("aria-expanded",String(opened))
+};
 // источник
 $("#fileIn").onchange=()=>{
   sourceId=null;
   const f=$("#fileIn").files[0];
   $("#srcTag").textContent=f?"выбран: "+f.name:"источник не выбран";
-  $("#srcTag").classList.remove("ok")
+  $("#srcTag").classList.remove("ok");
+  if(!running)clearReport()
 };
 $("#upBtn").onclick=async()=>{const f=$("#fileIn").files[0];
   if(!f)return toast("Выберите ZIP-архив с учебным проектом");
@@ -345,10 +392,11 @@ function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length
   if(wf.nodes.some(n=>n.type==="condition"&&!n.config.minSeverity))return ERR.invalid_node_config;return null}
 $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)return toast(err);
   if(!sourceId){$("#src").classList.add("need");return toast("Сначала загрузите проект: ZIP-архив")}
-  running=true;$("#runBtn").disabled=true;$("#runBtn").textContent="Идёт запуск…";pick=null;
+  const runSource=sourceId;
+  running=true;$("#runBtn").disabled=true;$("#runBtn").textContent="Идёт запуск…";pick=null;inspector();renderChat();
   try{await save();
-    const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId})});
-    report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};openRep();render();renderRep();
+    const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource})});
+    report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};openRep();render();renderRep();renderAI();
     for(let i=0;i<150;i++){await wait(800);report=await api("/runs/"+r.runId);report.findings=report.findings||[];render();renderRep();if(report.status==="succeeded"||report.status==="failed")break}
     if(report.status==="running"||report.status==="queued")toast("Запуск идёт дольше обычного. Откройте отчёт позже: "+r.runId)}
   catch(e){fail(e)}
@@ -357,7 +405,7 @@ $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)ret
 function openRep(){$("#rep").classList.remove("min");$("#repToggle").textContent="Свернуть"}
 $("#repToggle").onclick=()=>{$("#rep").classList.toggle("min");$("#repToggle").textContent=$("#rep").classList.contains("min")?"Развернуть":"Свернуть"};
 function nodeNote(n,s){const o=s.output;
-  if(n.type==="ai"&&o){if(o.aiAvailable===false)return`<br><small style="color:var(--bad)">LLM недоступна, находки переданы дальше без рекомендаций</small>`;
+  if(n.type==="ai"&&o){if(o.aiAvailable===false)return`<br><small style="color:var(--bad)">${esc(LLM_ERRORS[o.errorCode]||"Модель недоступна. Находки сохранены.")}</small>`;
     if(o.aiAvailable)return`<br><small>объяснено: ${o.explained} из ${o.total}${o.limit?` (лимит ${o.limit} самых критичных)`:""}</small>`}
   if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
   if(!o)return"";if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
@@ -421,13 +469,64 @@ function renderRep(){const b=$("#repBody");if(!report){delete b.dataset.runId;$(
     item.setAttribute("aria-pressed","true");
     renderAI()
   })}
-// AI-панель: показывает aiAnalysis из отчёта; статус LLM берётся из вывода AI-нод
+let chatState = {runId: null, turns: [], pending: false, error: ""};
+
+function renderChat(scroll = false) {
+  const ready = !running && report && ["succeeded", "failed"].includes(report.status);
+  const runId = ready ? report.runId : null;
+  const input = $("#chatIn");
+  const button = $("#chatBtn");
+  const log = $("#chatLog");
+  if (chatState.runId !== runId) {
+    chatState = {runId, turns: [], pending: false, error: ""};
+    input.value = "";
+  }
+  input.disabled = button.disabled = !ready || chatState.pending;
+  input.placeholder = ready ? "Вопрос по отчёту…" : "Сначала запустите проверку";
+  button.textContent = chatState.pending ? "Ждём ответ…" : "Спросить";
+  log.innerHTML = chatState.turns.map(turn =>
+    `<div class="msg ${turn.role === "user" ? "me" : ""}">${esc(turn.content)}</div>`
+  ).join("") + (chatState.error ? `<div class="warn">${esc(chatState.error)}</div>` : "");
+  if (scroll) log.parentElement.scrollTop = log.parentElement.scrollHeight;
+}
+
+$("#reportChat").onsubmit = async event => {
+  event.preventDefault();
+  const input = $("#chatIn");
+  const question = input.value.trim();
+  const state = chatState;
+  if (!question || !state.runId || state.pending || running) return;
+  const history = state.turns.slice(-8).map(turn => ({...turn, content: turn.content.slice(0, 2000)}));
+  state.turns.push({role: "user", content: question});
+  state.pending = true;
+  state.error = "";
+  input.value = "";
+  renderChat(true);
+  try {
+    const reply = await api(`/runs/${encodeURIComponent(state.runId)}/chat`, {
+      method: "POST", headers: JH, body: JSON.stringify({question, history})
+    });
+    state.turns.push({role: "assistant", content: reply.answer});
+  } catch (error) {
+    state.turns.pop();
+    state.error = LLM_ERRORS[error.code] || error.message || "Не удалось получить ответ.";
+    if (chatState === state) input.value = question;
+  } finally {
+    state.pending = false;
+    if (chatState === state) {
+      renderChat(true);
+      input.focus();
+    }
+  }
+};
+
 function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
   const ai=(report?.nodes||[]).map(s=>s.output).filter(o=>o&&"aiAvailable" in o);
-  $("#llmTag").textContent=a?"AI-анализ готов":ai.some(o=>o.aiAvailable===false)?"LLM недоступна":"";
-  if(!a){b.innerHTML=`<div class="empty">${ai.some(o=>o.aiAvailable===false)?"Модель не ответила, поэтому рекомендаций нет. Проверьте настройки LLM на бэкенде. Находки видны в отчёте.":"Добавьте в сценарий ноду «AI-рекомендации» после анализаторов и запустите проверку: здесь появятся объяснения находок и советы по исправлению."}</div>`;return}
+  const failed=ai.find(o=>o.aiAvailable===false);
+  $("#llmTag").textContent=a?"AI-анализ готов":failed?"LLM недоступна":"";
+  renderChat();
+  if(!a){b.innerHTML=`<div class="empty">${failed?esc(LLM_ERRORS[failed.errorCode]||"Модель недоступна. Находки сохранены."):"Добавьте ноду «AI-рекомендации» после анализаторов, чтобы получить советы автоматически, или задайте вопрос по готовому отчёту."}</div>`;return}
   b.innerHTML=`<div class="rec"><b>Итог</b>${esc(a.summary)}</div>`+a.recommendations.map(r=>{const f=(report.findings||[]).find(x=>x.id===r.findingId);return f?`<div class="rec ${pick===f.id?"pick":""}"><b>${esc(f.file)}${f.line?":"+f.line:""}</b>${esc(r.explanation)}<br><br><i>Что сделать:</i> ${esc(r.remediation)}</div>`:""}).join("")}
-$("#chatIn").disabled=$("#chatBtn").disabled=true;$("#chatIn").placeholder="Чат появится вместе с AI на бэкенде";
 $("#wfName").oninput=e=>wf.name=e.target.value;
 init();left();render();renderRep();renderAI();ping();
 </script>

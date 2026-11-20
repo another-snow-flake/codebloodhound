@@ -24,13 +24,15 @@
 
 Для полной проверки загрузите учебный архив организаторов со справочником `vulnerability-database/vulnerabilities.json`. Добавьте из каталога «Анализ зависимостей» (SCA) и «Статический анализ» (SAST) и соедините их с остальным графом. SCA берёт версии из Gradle, отдаёт приоритет `gradle.lockfile` и сверяет версии с офлайн-справочником Maven. Если вы загружаете только исходники, задайте путь к справочнику через `CYBER_GARDEN_ADVISORIES` перед запуском API. SAST проверяет Kotlin по базовым правилам для SQL, TLS, CORS и прав доступа. Находки SAST требуют проверки по контексту.
 
-Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке, расписание, AI-чат и уведомления ещё в работе. Черновики принимают все типы нод, а попытка запустить неподключённую ноду вернёт `422 unsupported_node`.
+Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке, расписание и уведомления ещё в работе. Черновики принимают все типы нод, а попытка запустить неподключённую ноду вернёт `422 unsupported_node`.
 
 При разработке сверяйте изменения API с фронтендом и проверяйте их на синтетических данных. Анализаторы сами ищут проблемы. LLM будет объяснять уже найденное. Ключи и токены хранятся на бэкенде.
 
 ### Подключение LLM
 
 Подключение к модели вынесено в `backend/llm.py`. Модуль AI-ноды вызывает `load_llm().complete(messages, json_mode=True)`, передаёт свой промпт и проверяет структуру ответа. Выберите [Ollama или DeepSeek](#llm-setup) в том же терминале, из которого запускаете FastAPI. Если провайдер недоступен, клиент возвращает `LlmError` с кодом причины.
+
+После завершения проверки можно задать вопрос справа. Чат использует до 15 наиболее серьёзных находок и последние сообщения по этому запуску. Для чата достаточно готового отчёта и настроенной модели, нода «AI-рекомендации» нужна для автоматического резюме.
 
 ## English
 
@@ -52,13 +54,15 @@ To call the API directly, use the [requests and sample graph](#workflow-api). To
 
 For a full scan, upload the organizers' training archive with `vulnerability-database/vulnerabilities.json`. Add **Анализ зависимостей** (SCA) and **Статический анализ** (SAST) from the catalog and connect them to the graph. SCA reads Gradle dependency versions, prefers `gradle.lockfile`, and checks versions against the offline Maven catalog. For a ZIP with source files only, set `CYBER_GARDEN_ADVISORIES` to the catalog path before starting the API. SAST checks Kotlin with basic rules for SQL, TLS, CORS and authorization. Review SAST findings in context.
 
-The prototype uses one local workspace. Accounts, repository URL uploads, schedules, AI chat, and notifications are still in progress. You can save any node type in a draft. Running a workflow with a node that isn't implemented returns `422 unsupported_node`.
+The prototype uses one local workspace. Accounts, repository URL uploads, schedules, and notifications are still in progress. You can save any node type in a draft. Running a workflow with a node that isn't implemented returns `422 unsupported_node`.
 
 Coordinate API changes with the frontend and test them with synthetic data. The scanners find issues. The LLM will explain those findings. Keep API keys and tokens on the backend.
 
 ### Connect an LLM
 
 The provider client lives in `backend/llm.py`. The AI node calls `load_llm().complete(messages, json_mode=True)` with its own prompt and validates the response structure. Choose [Ollama or DeepSeek](#llm-setup) in the terminal that starts FastAPI. If the provider is unavailable, the client raises `LlmError` with an error code.
+
+Ask a question in the right panel after a scan finishes. Chat uses up to 15 of the most severe findings and recent messages from that run. A finished report and a configured model are enough for chat. Add the AI node to generate an automatic summary.
 
 ## Launch
 
@@ -95,6 +99,7 @@ Compress-Archive -Path .data\training-sample\application.properties -Destination
 | `PUT /workflows/{workflowId}` | Изменённый граф / updated graph → `Workflow` |
 | `POST /workflows/{workflowId}/runs` | `{"sourceId":"..."}` → `202`, `runId` |
 | `GET /runs/{runId}` | Проверяйте статус до / poll until `succeeded` or `failed` |
+| `POST /runs/{runId}/chat` | `{"question":"...","history":[]}` → `{"answer":"..."}` |
 
 Схемы запросов и ответов / Request and response schemas — [OpenAPI JSON](http://127.0.0.1:8000/openapi.json). Ошибки / Errors — `{code, message}`.
 

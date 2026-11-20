@@ -78,6 +78,23 @@ class AiAnalysis(BaseModel):
     recommendations: list[Recommendation]
 
 
+ChatText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: ChatText
+
+
+class RunChatRequest(BaseModel):
+    question: ChatText
+    history: list[ChatTurn] = Field(default_factory=list, max_length=8)
+
+
+class RunChatResponse(BaseModel):
+    answer: str
+
+
 class NodeResult(BaseModel):
     nodeId: Identifier
     status: NodeStatus = "queued"

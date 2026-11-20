@@ -3,10 +3,10 @@ import os
 import unittest
 from unittest import mock
 
-from backend.ai import MAX_FINDINGS, build_messages, explain_findings
+from backend.ai import MAX_FINDINGS, answer_report_question, build_messages, explain_findings
 from backend.llm import LlmError
 from backend.runner import plan_run, run_ai
-from backend.schemas import Finding, RunReport, WorkflowDraft
+from backend.schemas import ChatTurn, Finding, RunChatRequest, RunReport, WorkflowDraft
 
 
 def finding(number: int, severity: str = "high", file: str = "src/App.kt") -> Finding:
@@ -110,6 +110,29 @@ class RunnerAiNodeTest(unittest.TestCase):
             "edges": [{"id": "e1", "source": "t", "target": "s"}, {"id": "e2", "source": "s", "target": "a"}],
         })
         self.assertEqual([node.id for node in plan_run(workflow).nodes], ["t", "s", "a"])
+
+
+class ReportChatTest(unittest.TestCase):
+    def test_chat_uses_findings_and_recent_turns(self):
+        client = FakeClient("Исправьте проблему в запросе.")
+        history = [
+            ChatTurn(role="user", content="Что найдено?"),
+            ChatTurn(role="assistant", content="Проблема в запросе."),
+        ]
+        reply = answer_report_question([finding(1)], "Что делать дальше?", history, client)
+        self.assertEqual(reply, "Исправьте проблему в запросе.")
+        messages = client.calls[0]
+        self.assertEqual([item["role"] for item in messages], ["system", "user", "user", "assistant", "user"])
+        self.assertIn("src/App.kt", messages[1]["content"])
+        self.assertEqual(messages[-1]["content"], "Что делать дальше?")
+
+    def test_chat_rejects_system_messages_and_excess_history(self):
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            RunChatRequest(question="Question", history=[{"role": "system", "content": "Instruction"}])
+        with self.assertRaises(ValidationError):
+            RunChatRequest(question="Question", history=[{"role": "user", "content": "Earlier question"}] * 9)
 
 
 if __name__ == "__main__":
