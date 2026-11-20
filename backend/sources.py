@@ -1,7 +1,7 @@
 import io
 import re
 import stat
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import PurePosixPath
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
@@ -58,33 +58,38 @@ def validate_zip(data: bytes) -> None:
         raise ApiProblem(400, "invalid_zip", "Upload a readable, unencrypted ZIP archive.") from error
 
 
-def find_secrets(data: bytes) -> list[Finding]:
-    findings = []
+def read_project_text(
+    data: bytes, include: Callable[[PurePosixPath], bool]
+) -> Iterator[tuple[PurePosixPath, str]]:
     with ZipFile(io.BytesIO(data)) as archive:
         for entry in archive.infolist():
             path = PurePosixPath(entry.filename)
-            if entry.is_dir() or entry.file_size > MAX_TEXT_FILE:
-                continue
-            if path.suffix.lower() not in TEXT_SUFFIXES and not path.name.startswith(".env"):
-                continue
-            content = archive.read(entry).decode("utf-8-sig", errors="replace")
-            suffix = path.suffix.lower()
-            lines = content.splitlines()
-            matched_lines = {
-                number for number, line in enumerate(lines, start=1) if has_secret_assignment(line, suffix)
-            }
-            if suffix in {".kt", ".kts"}:
-                matched_lines.update(kotlin_secret_lines(lines))
-            for line_number in sorted(matched_lines):
-                findings.append(Finding(
-                    id=uuid4().hex,
-                    scanner="secrets",
-                    ruleId="hardcoded-secret",
-                    file=path.as_posix(),
-                    line=line_number,
-                    severity="high",
-                    message="Possible hardcoded credential. Move it to a secret store or environment variable.",
-                ))
+            if not entry.is_dir() and entry.file_size <= MAX_TEXT_FILE and include(path):
+                yield path, archive.read(entry).decode("utf-8-sig", errors="replace")
+
+
+def find_secrets(data: bytes) -> list[Finding]:
+    findings = []
+    for path, content in read_project_text(
+        data, lambda path: path.suffix.lower() in TEXT_SUFFIXES or path.name.startswith(".env")
+    ):
+        suffix = path.suffix.lower()
+        lines = content.splitlines()
+        matched_lines = {
+            number for number, line in enumerate(lines, start=1) if has_secret_assignment(line, suffix)
+        }
+        if suffix in {".kt", ".kts"}:
+            matched_lines.update(kotlin_secret_lines(lines))
+        for line_number in sorted(matched_lines):
+            findings.append(Finding(
+                id=uuid4().hex,
+                scanner="secrets",
+                ruleId="hardcoded-secret",
+                file=path.as_posix(),
+                line=line_number,
+                severity="high",
+                message="Possible hardcoded credential. Move it to a secret store or environment variable.",
+            ))
     return findings
 
 

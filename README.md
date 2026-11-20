@@ -6,7 +6,7 @@
 
 ## Русский
 
-Делаем конструктор проверок безопасности для учебных проектов на Kotlin, Spring Boot и Gradle Kotlin DSL. Сейчас в редакторе можно собрать сценарий из нод, сохранить его, запустить поиск зашитых паролей, токенов и ключей и скачать схему в JSON. В отчёте видны статусы нод, критичность, файл и строка каждой находки.
+Делаем конструктор проверок безопасности для учебных проектов на Kotlin, Spring Boot и Gradle Kotlin DSL. В редакторе можно собрать сценарий из нод, сохранить его, запустить поиск секретов, SCA и SAST и скачать схему в JSON. В отчёте видны статусы нод, критичность, файл и строка каждой находки.
 
 ### Локальный запуск
 
@@ -22,13 +22,19 @@
 
 Для работы напрямую с API используйте [запросы и пример графа](#workflow-api). Если остались данные старого SQLite-прототипа, запустите PostgreSQL и выполните [импорт](#database) перед запуском FastAPI. Он сохранит ID архивов, сценариев и отчётов, а при повторном запуске пропустит уже перенесённые записи.
 
-Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке, расписание, SCA, SAST, AI и уведомления ещё в работе. Черновики принимают все типы нод, а попытка запустить неподключённую ноду вернёт `422 unsupported_node`.
+Для полной проверки загрузите учебный архив организаторов со справочником `vulnerability-database/vulnerabilities.json`. Добавьте из каталога «Анализ зависимостей» (SCA) и «Статический анализ» (SAST) и соедините их с остальным графом. SCA берёт версии из Gradle, отдаёт приоритет `gradle.lockfile` и сверяет версии с офлайн-справочником Maven. Если вы загружаете только исходники, задайте путь к справочнику через `CYBER_GARDEN_ADVISORIES` перед запуском API. SAST проверяет Kotlin по базовым правилам для SQL, TLS, CORS и прав доступа. Находки SAST требуют проверки по контексту.
+
+Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке, расписание, AI и уведомления ещё в работе. Черновики принимают все типы нод, а попытка запустить неподключённую ноду вернёт `422 unsupported_node`.
 
 При разработке сверяйте изменения API с фронтендом и проверяйте их на синтетических данных. Анализаторы сами ищут проблемы. LLM будет объяснять уже найденное. Ключи и токены хранятся на бэкенде.
 
+### Подключение LLM
+
+Подключение к модели вынесено в `backend/llm.py`. Модуль AI-ноды вызывает `load_llm().complete(messages, json_mode=True)`, передаёт свой промпт и проверяет структуру ответа. Выберите [Ollama или DeepSeek](#llm-setup) в том же терминале, из которого запускаете FastAPI. Если провайдер недоступен, клиент возвращает `LlmError` с кодом причины.
+
 ## English
 
-We're building a security workflow editor for training projects that use Kotlin, Spring Boot, and Gradle Kotlin DSL. You can build and save a workflow, scan for hardcoded passwords, tokens, and keys, and download the workflow as JSON. Reports show node status, severity, and the file and line for each finding.
+We're building a security workflow editor for training projects that use Kotlin, Spring Boot, and Gradle Kotlin DSL. You can build and save a workflow, run secret detection, SCA and SAST, and download the workflow as JSON. Reports show node status, severity, and the file and line for each finding.
 
 ### Run locally
 
@@ -44,9 +50,15 @@ The editor uses FastAPI at `127.0.0.1:8000` by default. You can change the addre
 
 To call the API directly, use the [requests and sample graph](#workflow-api). To bring over data from the old SQLite prototype, start PostgreSQL and run the [import](#database) before FastAPI. The import preserves IDs and skips records already imported.
 
-The prototype uses one local workspace. Accounts, repository URL uploads, schedules, SCA, SAST, AI, and notifications are still in progress. You can save any node type in a draft. Running a workflow with a node that isn't implemented returns `422 unsupported_node`.
+For a full scan, upload the organizers' training archive with `vulnerability-database/vulnerabilities.json`. Add **Анализ зависимостей** (SCA) and **Статический анализ** (SAST) from the catalog and connect them to the graph. SCA reads Gradle dependency versions, prefers `gradle.lockfile`, and checks versions against the offline Maven catalog. For a ZIP with source files only, set `CYBER_GARDEN_ADVISORIES` to the catalog path before starting the API. SAST checks Kotlin with basic rules for SQL, TLS, CORS and authorization. Review SAST findings in context.
+
+The prototype uses one local workspace. Accounts, repository URL uploads, schedules, AI, and notifications are still in progress. You can save any node type in a draft. Running a workflow with a node that isn't implemented returns `422 unsupported_node`.
 
 Coordinate API changes with the frontend and test them with synthetic data. The scanners find issues. The LLM will explain those findings. Keep API keys and tokens on the backend.
+
+### Connect an LLM
+
+The provider client lives in `backend/llm.py`. The AI node calls `load_llm().complete(messages, json_mode=True)` with its own prompt and validates the response structure. Choose [Ollama or DeepSeek](#llm-setup) in the terminal that starts FastAPI. If the provider is unavailable, the client raises `LlmError` with an error code.
 
 ## Launch
 
@@ -122,3 +134,34 @@ $env:DATABASE_URL = 'postgresql://USER:PASSWORD@HOST:5432/DBNAME'
 ```
 
 Исходный файл SQLite открывается только для чтения. / The SQLite source file is opened read-only.
+
+## LLM setup
+
+Локальная модель в Ollama / Local model served by Ollama:
+
+```powershell
+$env:LLM_PROVIDER = 'local'
+$env:LOCAL_LLM_BASE_URL = 'http://127.0.0.1:11434/v1'
+$env:LOCAL_LLM_MODEL = '<installed-model>'
+```
+
+Укажите название установленной модели. Для другого OpenAI-совместимого сервера задайте его базовый URL и, если нужен ключ, `LOCAL_LLM_API_KEY`. / Use the installed model's name. For another OpenAI-compatible server, set its base URL and `LOCAL_LLM_API_KEY` if it requires authentication. [Ollama API](https://docs.ollama.com/api/openai-compatibility)
+
+DeepSeek API:
+
+```powershell
+$env:LLM_PROVIDER = 'deepseek'
+$env:DEEPSEEK_MODEL = 'deepseek-flash'
+$env:DEEPSEEK_API_KEY = [Net.NetworkCredential]::new('', (Read-Host 'DeepSeek API key' -AsSecureString)).Password
+```
+
+Провайдер выбирается через `LLM_PROVIDER`. Таймаут по умолчанию — 60 секунд, его можно изменить через `LLM_TIMEOUT_SECONDS`. / Select the provider with `LLM_PROVIDER`. The default timeout is 60 seconds. Override it with `LLM_TIMEOUT_SECONDS`. [DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)
+
+Пример вызова из AI-ноды / Example call from the AI node:
+
+```python
+from backend.llm import load_llm
+
+messages = [{"role": "user", "content": 'Return a JSON object with "status" set to "ok".'}]
+answer = load_llm().complete(messages, json_mode=True)
+```

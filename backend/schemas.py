@@ -61,6 +61,10 @@ class Finding(BaseModel):
     severity: Severity
     message: str
     cve: str | None = None
+    advisoryId: str | None = None
+    group: str | None = None
+    artifact: str | None = None
+    version: str | None = None
 
 
 class Recommendation(BaseModel):

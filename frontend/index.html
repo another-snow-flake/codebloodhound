@@ -87,16 +87,26 @@ label.f{display:block;margin:8px 0 4px;color:var(--mute);font-size:12.5px}
 .rep.min .rb{display:none}
 .rh{display:flex;align-items:center;gap:10px;padding:8px 12px}
 .rh b{font-size:14px}
-.rb{overflow:auto;padding:0 12px 12px;display:grid;grid-template-columns:230px 1fr;gap:16px}
+.rb{overflow:auto;padding:0 12px 12px;display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px}
 .rb h4{margin:4px 0 6px;font-size:13px;color:var(--mute);font-weight:500}
 .nl div{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
 .nl small{color:var(--mute)}
-.fnd{width:100%;border-collapse:collapse;font-size:13px}
-.fnd td,.fnd th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-.fnd th{color:var(--mute);font-weight:500}
-.fnd tr.pick{background:color-mix(in srgb,var(--acc) 14%,transparent)}
-.fnd tbody tr{cursor:pointer}
-.sev{font-weight:600}.sev.critical{color:var(--crit)}.sev.high{color:var(--high)}.sev.medium{color:var(--med)}.sev.low{color:var(--low)}
+.finding-level{background:var(--card);border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
+.finding-level summary{cursor:pointer;padding:8px 10px;font-size:13px;font-weight:600}
+.finding-level summary:hover{background:var(--panel);border-radius:8px}
+.finding-level .count{margin-left:6px;color:var(--mute);font-size:12px;font-weight:400}
+.finding-level > summary .dot{display:inline-block;width:8px;height:8px;margin:0 6px;background:var(--severity-color)}
+.finding-level.critical{--severity-color:var(--crit)}
+.finding-level.high{--severity-color:var(--high)}
+.finding-level.medium{--severity-color:var(--med)}
+.finding-level.low{--severity-color:var(--low)}
+.finding-types{padding:0 10px 6px}
+.finding-type{border-top:1px solid var(--line)}
+.finding-items{list-style:none;margin:0 0 6px;padding:0}
+.finding-item{display:block;width:100%;padding:8px 10px;border:0;border-radius:6px;background:transparent;text-align:left;overflow-wrap:anywhere}
+.finding-item:hover{background:var(--bg)}
+.finding-item[aria-pressed="true"]{background:color-mix(in srgb,var(--acc) 14%,transparent)}
+.finding-item span{display:block;margin-top:4px;font-size:12px;color:var(--mute)}
 .ph{padding:12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
 .ph h3{margin:0;flex:1}
 main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
@@ -117,7 +127,7 @@ main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag
 .modal textarea{width:100%;height:280px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
 .toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;z-index:60;display:none;max-width:90vw}
 .chk{display:flex;gap:8px;align-items:center;margin-top:10px}
-@media (max-width:900px){main,main.aic{grid-template-columns:1fr}#left,#right{display:none}.insp{width:230px}.rb{grid-template-columns:1fr}.brand{display:none}}
+@media (max-width:900px){main,main.aic{grid-template-columns:1fr}#left,#right{display:none}.insp{width:230px}.rb{grid-template-columns:minmax(0,1fr)}.brand{display:none}}
 </style>
 </head>
 <body>
@@ -186,9 +196,19 @@ main.aic #right .ab{display:none}main.aic #right .ph h3,main.aic #right .ph .tag
 
 <script>
 const T={trigger:{n:"Запуск",d:"Ручной запуск",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Ветвление по критичности",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
-const SUPPORTED=new Set(["trigger","secrets","condition"]); // что сейчас умеет исполнять бэкенд
+const SCANNERS=new Set(["secrets","sca","sast"]);
+const SUPPORTED=new Set(["trigger","condition",...SCANNERS]);
 const SEV=["low","medium","high","critical"],SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
-const RULES={"hardcoded-secret":"Секрет в коде"};
+const REPORT_LEVELS={critical:"Критические",high:"Высокие",medium:"Средние",low:"Низкие"};
+const RULES={
+  "hardcoded-secret":"Секрет в коде",
+  "vulnerable-dependency":"Уязвимая зависимость",
+  "sql-injection":"Небезопасная сборка SQL",
+  "tls-verification":"Ослабленная проверка TLS",
+  "credentialed-cors":"Широкий CORS с учётными данными",
+  "route-authorization":"Проверка доступа к маршруту",
+  "object-authorization":"Проверка доступа к объекту"
+};
 const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Бэкенд пока запускает только ручной режим.",invalid_node_config:"Заполните настройки условия: нужна минимальная критичность.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
@@ -258,6 +278,8 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     if(n.type==="trigger")h+=`<label class="f">Режим</label><select data-k="mode"><option value="manual">Вручную</option><option value="schedule" disabled>По расписанию (скоро)</option></select><p class="note">Источник берётся из панели «Проект».</p>`;
     else if(n.type==="condition")h+=`<label class="f">Если есть находка не ниже</label><select data-k="minSeverity">${SEV.map(s=>`<option value="${s}">${SEVRU[s]}</option>`).join("")}</select><p class="note">Выход «да» срабатывает при совпадении, иначе «нет». Сравнения и regex появятся позже.</p>`;
     else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в .kt, .kts, .java, .properties, .yml, .json, .toml и .env. Значения секретов в отчёт не попадают.</p>`;
+    else if(n.type==="sca")h+=`<p class="note">Сверяет версии Gradle с Maven-справочником. Загрузите полный учебный архив со справочником или настройте справочник на бэкенде.</p>`;
+    else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin-код на ошибки в SQL, настройках TLS и CORS, правилах доступа к маршрутам и записям.</p>`;
     else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
     h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
   box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
@@ -334,13 +356,67 @@ $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)ret
 function openRep(){$("#rep").classList.remove("min");$("#repToggle").textContent="Свернуть"}
 $("#repToggle").onclick=()=>{$("#rep").classList.toggle("min");$("#repToggle").textContent=$("#rep").classList.contains("min")?"Развернуть":"Свернуть"};
 function nodeNote(n,s){if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
-  const o=s.output;if(!o)return"";if(n.type==="secrets")return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
-function renderRep(){const b=$("#repBody");if(!report){$("#repTag").textContent="запусков ещё не было";b.innerHTML=`<div class="empty">Загрузите проект и нажмите «Запустить» — здесь появятся статусы нод и находки.</div>`;return}
+  const o=s.output;if(!o)return"";if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
+function findingItem(f) {
+  const location = f.line == null ? f.file : f.file + ":" + f.line;
+  const advisory = f.cve || f.advisoryId;
+  return `<li><button class="finding-item" type="button" data-f="${esc(f.id)}" aria-pressed="${pick === f.id}">
+    <b>${esc(location)}</b>${advisory ? ` <small>${esc(advisory)}</small>` : ""}
+    <span>${esc(f.message)}</span>
+  </button></li>`;
+}
+
+function renderFindings(findings, openGroups) {
+  if (!findings.length) {
+    const message = {
+      succeeded: "Находок нет: проверка прошла успешно.",
+      failed: "Проверка завершилась с ошибкой. Подробности указаны рядом с нодой."
+    }[report.status] || "Идёт проверка…";
+    return `<div class="empty">${message}</div>`;
+  }
+
+  return Object.entries(REPORT_LEVELS).map(([severity, title]) => {
+    const types = new Map();
+    let count = 0;
+    for (const finding of findings) {
+      if (finding.severity !== severity) continue;
+      if (!types.has(finding.ruleId)) types.set(finding.ruleId, []);
+      types.get(finding.ruleId).push(finding);
+      count++;
+    }
+    if (!count) return "";
+
+    const groups = Array.from(types, ([ruleId, items]) => {
+      const group = JSON.stringify([severity, ruleId]);
+      const label = Object.hasOwn(RULES, ruleId) ? RULES[ruleId] : ruleId;
+      return `<details class="finding-type" data-group="${esc(group)}" ${openGroups.has(group) ? "open" : ""}>
+        <summary>${esc(label)} <span class="count">(${items.length})</span></summary>
+        <ul class="finding-items">${items.map(findingItem).join("")}</ul>
+      </details>`;
+    }).join("");
+    return `<details class="finding-level ${severity}" data-group="${severity}" ${openGroups.has(severity) ? "open" : ""}>
+      <summary><span class="dot" aria-hidden="true"></span>${title} <span class="count">(${count})</span></summary>
+      <div class="finding-types">${groups}</div>
+    </details>`;
+  }).join("");
+}
+
+function renderRep(){const b=$("#repBody");if(!report){delete b.dataset.runId;$("#repTag").textContent="запусков ещё не было";b.innerHTML=`<div class="empty">Загрузите проект и нажмите «Запустить» — здесь появятся статусы нод и находки.</div>`;return}
   $("#repTag").textContent=report.runId.slice(0,8)+" · "+stLabel(report.status);
   const fs=report.findings||[];
+  const sameRun=b.dataset.runId===report.runId;
+  const openGroups=new Set(sameRun?Array.from(b.querySelectorAll("details[open]"),e=>e.dataset.group):[]);
+  const scrollTop=sameRun?b.scrollTop:0;
+  b.dataset.runId=report.runId;
   b.innerHTML=`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{const n=wf.nodes.find(x=>x.id===s.nodeId);return n?`<div><span>${T[n.type].n}${nodeNote(n,s)}</span><small>${stLabel(s.status)}</small></div>`:""}).join("")}</div></div>
-  <div><h4>Находки (${fs.length})</h4>${fs.length?`<table class="fnd"><thead><tr><th>Критичность</th><th>Правило</th><th>Файл</th><th>Описание</th></tr></thead><tbody>${fs.map(f=>`<tr data-f="${esc(f.id)}" class="${pick===f.id?"pick":""}"><td class="sev ${f.severity}">${SEVRU[f.severity]}</td><td>${esc(RULES[f.ruleId]||f.ruleId)}${f.cve?`<br><small>${esc(f.cve)}</small>`:""}</td><td>${esc(f.file)}${f.line?":"+f.line:""}</td><td>${esc(f.message)}</td></tr>`).join("")}</tbody></table>`:`<div class="empty">${report.status==="succeeded"?"Находок нет: проверка прошла успешно.":"Идёт проверка…"}</div>`}</div>`;
-  b.querySelectorAll("[data-f]").forEach(r=>r.onclick=()=>{pick=r.dataset.f;renderRep();renderAI()})}
+  <div><h4>Находки (${fs.length})</h4>${renderFindings(fs,openGroups)}</div>`;
+  b.scrollTop=scrollTop;
+  b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{
+    b.querySelector('.finding-item[aria-pressed="true"]')?.setAttribute("aria-pressed","false");
+    pick=item.dataset.f;
+    item.setAttribute("aria-pressed","true");
+    renderAI()
+  })}
 // AI-панель: на бэкенде AI пока нет, панель показывает аналитику, когда она появится в отчёте
 function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;$("#llmTag").textContent="LLM не подключён";
   if(!a){b.innerHTML=`<div class="empty">AI-рекомендации и чат появятся, когда бэкенд подключит ноду «AI-рекомендации». Находки уже видны в отчёте.</div>`;return}

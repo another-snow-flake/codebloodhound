@@ -1,13 +1,16 @@
 from graphlib import CycleError, TopologicalSorter
 from typing import NamedTuple
 
+from .sca import CatalogUnavailable, find_vulnerable_dependencies
+from .sast import find_kotlin_issues
 from .schemas import ApiProblem, Edge, Finding, Node, RunReport, WorkflowDraft
 from .sources import find_secrets
 from .storage import Storage
 
 
 SEVERITY_RANK = {severity: rank for rank, severity in enumerate(("low", "medium", "high", "critical"))}
-SUPPORTED_NODES = {"trigger", "secrets", "condition"}
+SCANNERS = {"secrets": find_secrets, "sca": find_vulnerable_dependencies, "sast": find_kotlin_issues}
+SUPPORTED_NODES = {"trigger", "condition", *SCANNERS}
 
 
 class ExecutionPlan(NamedTuple):
@@ -81,8 +84,8 @@ def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, sourc
         try:
             if node.type == "trigger":
                 result.output = {"sourceId": source_id}
-            elif node.type == "secrets":
-                findings = find_secrets(archive)
+            elif node.type in SCANNERS:
+                findings = SCANNERS[node.type](archive)
                 report.findings.extend(findings)
                 context.update((finding.id, finding) for finding in findings)
                 result.output = {"findings": [finding.model_dump(mode="json", exclude_unset=True) for finding in findings]}
@@ -93,6 +96,9 @@ def execute_plan(storage: Storage, report: RunReport, plan: ExecutionPlan, sourc
                 handle = "true" if matched else "false"
             result.status = "succeeded"
             active_contexts[node.id, handle] = list(context.values())
+        except CatalogUnavailable as error:
+            result.status = "failed"
+            result.error = str(error)
         except Exception:
             result.status = "failed"
             result.error = "Node execution failed."
