@@ -150,6 +150,7 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 .modal textarea{width:100%;height:280px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
 .toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;z-index:60;display:none;max-width:90vw}
 .chk{display:flex;gap:8px;align-items:center;margin-top:10px}
+.chk[hidden]{display:none}
 @media (max-width:900px){
   header{flex-wrap:wrap}
   main,main.aic{grid-template-columns:minmax(0,1fr)}
@@ -223,7 +224,11 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 <div class="ov" id="ovSet"><div class="modal">
   <h2>Настройки</h2><p class="note">Адрес бэкенда. Страницу нужно открывать с http://localhost:5173 или :3000, иначе бэкенд отклонит запросы (CORS).</p>
   <label class="f">Адрес API</label><input type="text" id="apiUrl" placeholder="http://127.0.0.1:8000">
-  <p class="note">Модели и адреса webhook настраиваются на бэкенде. Получатель выбирается в ноде «Уведомление».</p>
+  <label class="f" for="llmModel">Модель для AI-рекомендаций и чата</label>
+  <select id="llmModel" aria-describedby="llmStatus"></select>
+  <p class="note" id="llmStatus" aria-live="polite"></p>
+  <label class="chk note" id="llmConsentRow" hidden><input type="checkbox" id="llmConsent"> Разрешаю отправлять находки (пути, строки, сообщения анализаторов) во внешний сервис DeepSeek. Значения секретов не отправляются.</label>
+  <p class="note">Список моделей, адреса и ключи задаются на бэкенде. Адреса webhook тоже настраиваются там, получатель выбирается в ноде «Уведомление».</p>
   <div class="row"><button class="btn" data-close>Закрыть</button><button class="btn pri" id="setSave">Сохранить и проверить</button></div>
 </div></div>
 
@@ -260,6 +265,9 @@ const LLM_ERRORS={
   invalid_response:"Модель вернула некорректный ответ.",
   incomplete_response:"Модель не закончила ответ.",
   run_in_progress:"Дождитесь завершения проверки.",
+  unknown_model:"Бэкенд больше не предлагает эту модель. Откройте настройки заново.",
+  model_missing:"Выбранная модель не скачана на сервере моделей. Скачайте её или выберите другую в настройках.",
+  no_api_key:"Для DeepSeek на бэкенде нужен DEEPSEEK_API_KEY.",
   http_error:"Эта версия бэкенда не поддерживает чат по отчёту."
 };
 const WEBHOOK_ERRORS={
@@ -406,8 +414,37 @@ async function loadWebhookRefs(){
   if(sel?.t==="n"&&wf.nodes.some(n=>n.id===sel.id&&n.type==="notify"))inspector()
 }
 async function ping(){const t=$("#apiTag");try{await api("/health");t.textContent="бэкенд на связи";t.classList.add("ok");loadWebhookRefs();return true}catch(e){t.textContent="нет связи с бэкендом";t.classList.remove("ok");webhookRefs=[];webhookListError="Нет связи с бэкендом.";inspector();return false}}
-$("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open")};
-$("#setSave").onclick=async()=>{if(running)return toast("Дождитесь завершения проверки");const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||"http://127.0.0.1:8000";if(next!==API){webhookRefs=[];webhookListError="Загрузка получателей…";API=next;inspector()}ls.set("cg_api",API);$("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
+// выбор модели: список и статусы отдаёт бэкенд, ключи остаются на сервере
+let llmSettings=null;
+const PROVIDERS={local:"локальная",deepseek:"DeepSeek API"};
+function modelLabel(id){const i=String(id||"").indexOf(":");return i<0?"":`${id.slice(i+1)} · ${PROVIDERS[id.slice(0,i)]||id.slice(0,i)}`}
+function llmReason(o){return{connection_error:"локальный сервер моделей не отвечает. Запущена ли Ollama?",model_missing:`модель не скачана. Выполните ollama pull ${o.model}`,no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY"}[o.reason]||o.reason}
+async function loadLlm(){const s=$("#llmModel"),st=$("#llmStatus");s.disabled=true;st.textContent="Загружаю список моделей…";$("#llmConsent").checked=false;
+  try{llmSettings=await api("/settings/llm")}
+  catch(e){llmSettings=null;s.innerHTML="";$("#llmConsentRow").hidden=true;st.innerHTML=`<span style="color:var(--bad)">${esc(e.code==="http_error"?"Эта версия бэкенда не поддерживает выбор модели.":e.message)}</span>`;renderAI();return}
+  const groups=[["local","Локальная модель: данные остаются на компьютере"],["deepseek","DeepSeek API: внешний сервис"]];
+  s.innerHTML=(llmSettings.selectedId?"":`<option value="">Не выбрана</option>`)+groups.map(([p,title])=>{const list=llmSettings.options.filter(o=>o.provider===p);
+    return list.length?`<optgroup label="${esc(title)}">${list.map(o=>`<option value="${esc(o.id)}" ${o.reason==="no_api_key"?"disabled":""}>${esc(o.model)}${o.available?"":" (недоступна)"}</option>`).join("")}</optgroup>`:""}).join("");
+  s.value=llmSettings.selectedId||"";s.disabled=false;llmStatusNote();renderAI()}
+function llmStatusNote(){const id=$("#llmModel").value,cur=llmSettings?.selectedId,o=llmSettings?.options.find(x=>x.id===id),st=$("#llmStatus");
+  $("#llmConsentRow").hidden=!(o?.provider==="deepseek"&&!cur?.startsWith("deepseek:"));
+  if(!llmSettings)return;
+  if(!o){st.textContent=cur?`Сейчас используется ${modelLabel(cur)}, но бэкенд её больше не предлагает.`:"Модель не выбрана: AI-нода и чат работать не будут.";return}
+  const state=o.available?`<span style="color:var(--ok)">${o.provider==="local"?"доступна":"ключ настроен"}</span>`:`<span style="color:var(--bad)">недоступна: ${esc(llmReason(o))}</span>`;
+  st.innerHTML=`${o.id===cur?"Сейчас используется":"Будет выбрана"}: <b>${esc(o.model)}</b> (${PROVIDERS[o.provider]}), ${state}.<br>Смена применится к следующему запуску AI-ноды и следующему вопросу в чате. Запрос, который уже идёт, закончится на прежней модели.`}
+$("#llmModel").onchange=llmStatusNote;
+$("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open");loadLlm()};
+$("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||"http://127.0.0.1:8000";
+  if(next!==API){if(running)return toast("Адрес API можно сменить после завершения проверки");webhookRefs=[];webhookListError="Загрузка получателей…";API=next;inspector();ls.set("cg_api",API);const ok=await ping();if(ok)loadLlm();
+    return toast(ok?"Бэкенд на связи. Проверьте модель для нового адреса.":"Нет связи с бэкендом по адресу "+API)}
+  const id=$("#llmModel").value;
+  if(llmSettings&&id&&id!==llmSettings.selectedId){
+    if(!$("#llmConsentRow").hidden&&!$("#llmConsent").checked)return toast("Подтвердите, что находки можно отправлять в DeepSeek");
+    try{llmSettings=await api("/settings/llm",{method:"PUT",headers:JH,body:JSON.stringify({modelId:id})})}
+    catch(e){$("#llmStatus").innerHTML=`<span style="color:var(--bad)">${esc(LLM_ERRORS[e.code]||e.message)}</span>`;return}
+    const o=llmSettings.options.find(x=>x.id===llmSettings.selectedId);renderAI();$("#ovSet").classList.remove("open");
+    return toast(`Модель: ${modelLabel(llmSettings.selectedId)}. ${o?.available?"Применится к следующему запросу.":"Сейчас она недоступна, проверьте сервер моделей."}`)}
+  $("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
 $("#theme").onclick=()=>{const d=document.documentElement,dark=d.dataset.theme?d.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;d.dataset.theme=dark?"light":"dark"};
 $("#aiToggle").onclick=()=>{
   const collapsed=$("#main").classList.toggle("aic");
@@ -595,7 +632,7 @@ $("#reportChat").onsubmit = async event => {
 const AI_STAGES=[["preparing","Готовим находки"],["waiting","Ждём ответ модели"],["validating","Проверяем рекомендации"],["done","Готово"]];
 const aiWaitStart={};
 function plural(n,one,few,many){const a=n%10,b=n%100;return`${n} ${a===1&&b!==11?one:a>=2&&a<=4&&(b<12||b>14)?few:many}`}
-function aiDoneText(o){return`объяснено ${o.explained} из ${o.total}${o.limit?` · лимит ${o.limit} самых критичных групп`:""}`}
+function aiDoneText(o){return`объяснено ${o.explained} из ${o.total}${o.limit?` · лимит ${o.limit} самых критичных групп`:""}${o.model?` · ${esc(modelLabel(o.model))}`:""}`}
 function aiStageBox(s){const o=s.output,idx=AI_STAGES.findIndex(x=>x[0]===o.stage);
   let waited=0;if(o.stage==="waiting"){const k=`${report.runId}:${s.nodeId}:${o.attempt||1}`;aiWaitStart[k]??=Date.now();waited=Math.round((Date.now()-aiWaitStart[k])/1000)}
   const detail={preparing:o.sent==null?"":`в запрос идут ${o.sent} из ${plural(o.total,"находки","находок","находок")}, ${plural(o.groups,"группа","группы","групп")}`,
@@ -613,7 +650,9 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
   const active=aiRes.find(s=>s.status==="running"&&s.output?.stage);
   const failed=aiRes.map(s=>s.output).find(o=>o?.aiAvailable===false);
   const done=aiRes.map(s=>s.output).filter(o=>o?.aiAvailable);
-  $("#llmTag").textContent=active?"AI работает…":a?"AI-анализ готов":failed?"LLM недоступна":"";
+  const current=llmSettings?.selectedId?modelLabel(llmSettings.selectedId):"";
+  $("#llmTag").textContent=active?"AI работает…":a?"AI-анализ готов":failed?"LLM недоступна":current;
+  $("#llmTag").title=current?`Модель для следующего запроса: ${current}. Сменить можно в настройках.`:"";
   renderChat();
   const sameRun=b.dataset.runId===report?.runId;
   const open=new Set(sameRun?Array.from(b.querySelectorAll("details[open]"),d=>d.dataset.g):[]);
@@ -630,7 +669,7 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
     +a.groups.map(g=>aiCard(g,open)).join("");
   b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{pick=item.dataset.f;renderRep();renderAI()})}
 $("#wfName").oninput=e=>wf.name=e.target.value;
-init();left();render();renderRep();renderAI();ping();
+init();left();render();renderRep();renderAI();ping().then(ok=>ok&&loadLlm());
 </script>
 </body>
 </html>

@@ -15,7 +15,8 @@
 - Работают ручной запуск, три анализатора, условие по критичности, отчёт, AI-рекомендации и чат по отчёту.
 - AI показывает этапы работы и группирует рекомендации. Топ действий считается по критичности, а CVE для разных версий одной библиотеки идут в отдельные карточки.
 - Webhook отправляет находки и AI-рекомендации из активной ветки. Доставка проверена в Edge на локальном HTTP-приёмнике с 15 находками из учебного архива.
-- До сдачи остаются расписание, дополнительные условия и экспорт находок в формате организаторов. Переключение моделей в редакторе описано в [AI_TASKS.md](AI_TASKS.md).
+- Модель для AI выбирается в настройках редактора без перезапуска API: локальные модели из Ollama или DeepSeek. Проверено в Chrome по шагам DeepSeek → qwen3:4b-instruct → DeepSeek, со сменой модели во время ответа и с не скачанной моделью. DeepSeek проверяли через локальную заглушку с тем же API, потому что реального ключа не было.
+- До сдачи остаются расписание, дополнительные условия и экспорт находок в формате организаторов.
 
 После каждого крупного изменения обновляйте этот блок в том же коммите. Запишите, что заработало, как это проверили и что осталось. Так другой чат или участник команды сможет продолжить с актуального состояния.
 
@@ -60,7 +61,8 @@ Updated November 20, 2026.
 - Manual runs, all three scanners, severity branching, reports, AI recommendations, and report chat work.
 - The AI panel shows processing stages and groups recommendations. Priorities are ranked by severity, and CVEs for different versions of the same dependency get separate cards.
 - The webhook sends findings and AI recommendations from the active branch. Delivery was tested in Edge with a local HTTP receiver and 15 findings from the training archive.
-- Scheduled runs, additional conditions, and exporting findings in the organizers' format are still pending. The model switcher is described in [AI_TASKS.md](AI_TASKS.md) (in Russian).
+- The AI model is chosen in the editor settings without restarting the API: local Ollama models or DeepSeek. Tested in Chrome: DeepSeek → qwen3:4b-instruct → DeepSeek, a switch during an answer, and a model that isn't downloaded. DeepSeek was tested against a local stub with the same API because no real key was available.
+- Scheduled runs, additional conditions, and exporting findings in the organizers' format are still pending.
 
 Update this section in the same commit as each major change. Record what works, how it was verified, and what remains so the next chat or teammate can pick up from here.
 
@@ -129,7 +131,9 @@ Compress-Archive -Path .data\training-sample\application.properties -Destination
 | `PUT /workflows/{workflowId}` | Изменённый граф / updated graph → `Workflow` |
 | `POST /workflows/{workflowId}/runs` | `{"sourceId":"..."}` → `202`, `runId` |
 | `GET /runs/{runId}` | Проверяйте статус до / poll until `succeeded` or `failed` |
-| `POST /runs/{runId}/chat` | `{"question":"...","history":[]}` → `{"answer":"..."}` |
+| `POST /runs/{runId}/chat` | `{"question":"...","history":[]}` → `{"answer":"...","model":"local:qwen3:8b"}` |
+| `GET /settings/llm` | Модели, их статус и выбранная / models, their status, and the selected one |
+| `PUT /settings/llm` | `{"modelId":"local:qwen3:8b"}` → новая модель для следующих AI-запросов / model for the next AI requests |
 | `GET /webhooks` | Список имён получателей / list of recipient names |
 
 Схемы запросов и ответов / Request and response schemas — [OpenAPI JSON](http://127.0.0.1:8000/openapi.json). Ошибки / Errors — `{code, message}`.
@@ -204,6 +208,12 @@ $env:LLM_PROVIDER = 'deepseek'
 $env:DEEPSEEK_MODEL = 'deepseek-flash'
 $env:DEEPSEEK_API_KEY = [Net.NetworkCredential]::new('', (Read-Host 'DeepSeek API key' -AsSecureString)).Password
 ```
+
+### Выбор модели в редакторе / Choosing the model in the editor
+
+`LLM_PROVIDER` задаёт модель при запуске API. Потом её можно сменить в настройках редактора (⚙): выбор применяется к следующему запуску AI-ноды и следующему вопросу в чате, а запрос, который уже идёт, заканчивается на прежней модели. Выбор хранится в памяти API и после перезапуска возвращается к `LLM_PROVIDER`. Локальные модели бэкенд запрашивает у сервера по `LOCAL_LLM_BASE_URL` (`/v1/models`) и добавляет к ним список `LOCAL_LLM_MODELS` через запятую. Модель из списка, которой нет на сервере, помечается как не скачанная. Модели DeepSeek задаёт `DEEPSEEK_MODELS` (по умолчанию `DEEPSEEK_MODEL`), без `DEEPSEEK_API_KEY` их выбрать нельзя. Чтобы перейти с локальной модели на DeepSeek, пользователь отмечает согласие на отправку находок. Ключи в редактор не передаются. Для Qwen3 4B берите `qwen3:4b-instruct`: тег `qwen3:4b` в Ollama ведёт на Thinking-версию, у которой рассуждения не отключаются и попадают в ответ. `DEEPSEEK_BASE_URL` (по умолчанию `https://api.deepseek.com`) нужен только для тестов с заглушкой.
+
+`LLM_PROVIDER` sets the model at API startup. You can switch it later in the editor settings (⚙); the choice applies to the next AI node run and chat message, while a request in flight finishes on the previous model. The choice lives in API memory and falls back to `LLM_PROVIDER` after a restart. Local models come from the server at `LOCAL_LLM_BASE_URL` (`/v1/models`) plus the comma-separated `LOCAL_LLM_MODELS`. DeepSeek models come from `DEEPSEEK_MODELS` and need `DEEPSEEK_API_KEY`. Switching from a local model to DeepSeek requires explicit consent in the editor. For Qwen3 4B use `qwen3:4b-instruct`: the `qwen3:4b` tag is the Thinking variant, whose reasoning can't be turned off.
 
 Провайдер выбирается через `LLM_PROVIDER`. Таймаут по умолчанию — 60 секунд, его можно изменить через `LLM_TIMEOUT_SECONDS`. / Select the provider with `LLM_PROVIDER`. The default timeout is 60 seconds. Override it with `LLM_TIMEOUT_SECONDS`. [DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)
 
