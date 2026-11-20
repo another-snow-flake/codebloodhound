@@ -282,7 +282,9 @@ const WEBHOOK_ERRORS={
 const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Бэкенд пока запускает только ручной режим.",invalid_node_config:"Заполните настройки условия: нужна минимальная критичность.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let API=ls.get("cg_api")||"http://127.0.0.1:8000";
+// локальная разработка: API на :8000; сайт через tools/serve_site.py: API на том же адресе под /api
+const DEFAULT_API=["5173","3000"].includes(location.port)||location.protocol==="file:"?"http://127.0.0.1:8000":location.origin+"/api";
+let API=ls.get("cg_api")||DEFAULT_API;
 async function api(path,opt){let r;
   try{r=await fetch(API+path,opt)}catch(e){throw{code:"network",message:`Нет связи с бэкендом (${API}). Проверьте, что uvicorn запущен и страница открыта с http://localhost:5173 или :3000: другие адреса бэкенд не пускает (CORS).`}}
   let b=null;try{b=await r.json()}catch(e){}
@@ -451,7 +453,7 @@ $("#llmCheck").onclick=async()=>{const id=$("#llmModel").value;if(!id)return;
   try{llmStatusNote(checkText(await checkLlm(id)))}catch(e){llmStatusNote(` <span style="color:var(--bad)">${esc(CHECK_ERRORS[e.code]||e.message)}</span>`)}
   finally{$("#llmCheck").disabled=false}};
 $("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open");loadLlm()};
-$("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||"http://127.0.0.1:8000";
+$("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||DEFAULT_API;
   if(next!==API){if(running)return toast("Адрес API можно сменить после завершения проверки");webhookRefs=[];webhookListError="Загрузка получателей…";API=next;inspector();ls.set("cg_api",API);ss.set("cg_model",null);ss.set("cg_model_consent",null);const ok=await ping();if(ok)loadLlm();
     return toast(ok?"Бэкенд на связи. Проверьте модель для нового адреса.":"Нет связи с бэкендом по адресу "+API)}
   const id=$("#llmModel").value;

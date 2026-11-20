@@ -13,7 +13,7 @@
 # network (TLS to the edge is dropped), so this script uses plain SSH instead.
 # Pass -RotateToken to issue a new key; the remote backend then needs the new value.
 
-param([switch]$RotateToken)
+param([switch]$RotateToken, [switch]$Stop)
 
 $ErrorActionPreference = 'Stop'
 $dir = Join-Path $env:LOCALAPPDATA 'codebloodhound-llm'
@@ -27,12 +27,18 @@ function Stop-OwnProcess([string]$pidFile, [scriptblock]$isOurs) {
     $id = (Get-Content $pidFile -Raw).Trim()
     Remove-Item $pidFile -Force
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$id)" -ErrorAction SilentlyContinue
-    if ($process -and (& $isOurs $process)) { Stop-Process -Id $process.ProcessId -Force -Confirm:$false }
+    if ($process -and (& $isOurs $process)) { taskkill /PID $process.ProcessId /T /F 2>&1 | Out-Null }
 }
 
 # Stop only what this script started earlier: same PID and the command line it used
 Stop-OwnProcess (Join-Path $dir 'gateway.pid') { param($p) $p.CommandLine -like "*$gateway*" -and $p.CommandLine -like "*--port $port*" }
 Stop-OwnProcess (Join-Path $dir 'tunnel.pid') { param($p) $p.Name -eq 'ssh.exe' -and $p.CommandLine -like "*80:127.0.0.1:${port}*localhost.run*" }
+
+if ($Stop) {
+    Remove-Item (Join-Path $dir 'tunnel-url.txt') -ErrorAction SilentlyContinue
+    Write-Output 'Stopped the model gateway and tunnel.'
+    return
+}
 
 try { Invoke-RestMethod http://127.0.0.1:11434/api/tags -TimeoutSec 5 | Out-Null }
 catch { throw 'Ollama is not running on 127.0.0.1:11434. Start the Ollama app first.' }

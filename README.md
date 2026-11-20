@@ -17,6 +17,7 @@
 - Webhook отправляет находки и AI-рекомендации из активной ветки. Доставка проверена в Edge на локальном HTTP-приёмнике с 15 находками из учебного архива.
 - Модель для AI выбирается в настройках редактора отдельно в каждой вкладке: локальные модели из Ollama или DeepSeek. Модель передаётся с запуском и вопросом в чате и фиксируется до начала работы, согласие на DeepSeek проверяет сервер. Перед сменой выполняется проверочный запрос, и если он не проходит, остаётся прежняя модель. Проверено в Chrome на двух вкладках одновременно (qwen3:8b и DeepSeek) и с не скачанной моделью. DeepSeek проверяли через локальную заглушку с тем же API, на реальном ключе не проверяли.
 - Локальную модель можно отдать бэкенду на другом компьютере через `tools/start_remote_llm.ps1`: шлюз с ключом и SSH-туннель. Скрипт останавливает только свои процессы, токен хранится в одном файле с доступом только для владельца и не попадает в вывод и логи. Шлюз ограничивает соединения и время чтения запроса. Проверено через публичный адрес: старый токен `401`, новый работает, служебный API Ollama закрыт, AI-нода отвечает.
+- Весь сайт можно показать с одного компьютера через `tools/start_site.ps1`: портативный PostgreSQL, FastAPI, редактор за паролем и публичная ссылка. Проверено через публичный адрес: без пароля `401`, сценарий с поиском секретов, SAST и AI прошёл за 13–15 с, чат ответил, данные сохранились в PostgreSQL.
 - До сдачи остаются расписание, дополнительные условия и экспорт находок в формате организаторов.
 
 После каждого крупного изменения обновляйте этот блок в том же коммите. Запишите, что заработало, как это проверили и что осталось. Так другой чат или участник команды сможет продолжить с актуального состояния.
@@ -64,6 +65,7 @@ Updated November 20, 2026.
 - The webhook sends findings and AI recommendations from the active branch. Delivery was tested in Edge with a local HTTP receiver and 15 findings from the training archive.
 - The AI model is chosen per browser tab: local Ollama models or DeepSeek. Each run and chat message carries its model, pinned before work starts; the server checks consent for DeepSeek. A synthetic check runs before a switch, and a failed check keeps the previous model. Tested in Chrome with two tabs at once (qwen3:8b and DeepSeek) and with a model that isn't downloaded. DeepSeek was tested against a local stub, not a real key.
 - A remote backend can use this PC's local model through `tools/start_remote_llm.ps1`: an authenticated gateway plus an SSH tunnel. The script stops only its own processes; the token lives in one owner-only file and never appears in output or logs. The gateway limits connections and request read time. Tested through the public URL: old token 401, new token works, Ollama's own API blocked.
+- The whole site can be shown from one PC with `tools/start_site.ps1`: portable PostgreSQL, FastAPI, the editor behind a password and a public link. Tested through the public URL: 401 without the password, a run with secrets, SAST and AI took 13–15 s, chat answered, data persisted in PostgreSQL.
 - Scheduled runs, additional conditions, and exporting findings in the organizers' format are still pending.
 
 Update this section in the same commit as each major change. Record what works, how it was verified, and what remains so the next chat or teammate can pick up from here.
@@ -122,6 +124,25 @@ New-Item -ItemType Directory -Path .data\training-sample -Force | Out-Null
 Set-Content -Encoding ASCII -Path .data\training-sample\application.properties -Value 'demo.password=synthetic-demo-password'
 Compress-Archive -Path .data\training-sample\application.properties -DestinationPath .data\training-sample.zip -Force
 ```
+
+## Show the site
+
+Чтобы показать сайт команде с одного компьютера, на нём должны быть Ollama, `.venv` и портативный PostgreSQL 17 в `%LOCALAPPDATA%\codebloodhound-site\pg17` с базой в `pgdata`. Docker не нужен. Запуск и остановка:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\start_site.ps1        # запустить или перезапустить
+powershell -ExecutionPolicy Bypass -File tools\start_site.ps1 -Url   # текущий адрес: localhost.run его периодически меняет
+powershell -ExecutionPolicy Bypass -File tools\start_site.ps1 -Stop  # остановить всё
+```
+
+Скрипт поднимает PostgreSQL, FastAPI с локальной моделью, `tools/serve_site.py` и SSH-туннель через localhost.run. Он печатает адрес, имя пользователя `team` и путь к файлу с паролем. Сам пароль на экран не выводится: его нужно открыть в `site-password.txt`.
+
+- `serve_site.py` отдаёт `frontend/` и пересылает `/api/*` в FastAPI. Страница и API на одном адресе, поэтому CORS менять не нужно, а редактор сам находит API по пути `/api`.
+- Весь сайт закрыт HTTP Basic. В API уходят только `Content-Type` и `Accept`, методы ограничены `GET`, `POST` и `PUT`. Не больше 32 соединений, на чтение запроса 30 секунд, тело до 11 МиБ.
+- Логи лежат в `%LOCALAPPDATA%\codebloodhound-site\logs`: `site.log` (метод, путь и статус каждого запроса), `api.err.log` (uvicorn и ошибки FastAPI), `postgres.log`, `tunnel.log`. Тела запросов и пароли в логи не пишутся. Через туннель адрес посетителя не виден, во всех строках будет `127.0.0.1`.
+- Два анонимных туннеля localhost.run с одного компьютера могут получить один адрес. Поэтому `start_site.ps1` останавливает туннель модели из `start_remote_llm.ps1`: сайту он не нужен, бэкенд ходит в Ollama напрямую.
+
+To demo the whole site from one PC, run `tools\start_site.ps1` (`-Url` prints the current address, `-Stop` stops everything). It starts PostgreSQL, FastAPI with the local model, `tools/serve_site.py` (the editor and `/api` on one origin, behind HTTP Basic with user `team`) and a localhost.run tunnel, and prints the URL and the password file path. Logs are in `%LOCALAPPDATA%\codebloodhound-site\logs`.
 
 ## Workflow API
 
