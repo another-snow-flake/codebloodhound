@@ -117,6 +117,25 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 .chat-log:empty{display:none}
 .rec{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px;line-height:1.45}
 .rec.pick{border-color:var(--acc)}
+.ai-top ol{margin:6px 0 0;padding-left:20px}.ai-top li{margin:4px 0}
+.ai-top li small,.ai-card small{color:var(--mute)}
+.sev{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:middle;background:var(--low)}
+.sev.critical{background:var(--crit)}.sev.high{background:var(--high)}.sev.medium{background:var(--med)}
+.ai-card{background:var(--card);border:1px solid var(--line);border-radius:10px;font-size:13px;line-height:1.45}
+.ai-card.pick{border-color:var(--acc)}
+.ai-card>summary{cursor:pointer;padding:9px 10px;list-style:none}
+.ai-card>summary::-webkit-details-marker{display:none}
+.ai-card>summary b{display:inline}
+.ai-card .count{color:var(--mute);font-size:12px;margin-left:4px}
+.ai-card .act{display:block;margin-top:3px}
+.ai-card .more{padding:0 10px 10px;border-top:1px solid var(--line)}
+.ai-card .more p{margin:8px 0}
+.ai-card ul{margin:0;padding:0;list-style:none}
+.ai-card .finding-item{padding:4px 6px}
+.ai-stage ol{margin:6px 0 0;padding-left:20px;font-size:13px}
+.ai-stage li{color:var(--mute)}.ai-stage li.now{color:var(--ink);font-weight:600}.ai-stage li.done{color:var(--ok)}
+.msg code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:color-mix(in srgb,var(--mute) 16%,transparent);padding:0 3px;border-radius:4px}
+.warn .btn{margin-top:6px}
 .rec b{display:block;margin-bottom:4px}
 .chat{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line)}
 .chat input{flex:1;min-width:0;border:1px solid var(--line);background:var(--card);border-radius:8px;padding:7px 10px}
@@ -397,7 +416,7 @@ $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)ret
   try{await save();
     const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource})});
     report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};openRep();render();renderRep();renderAI();
-    for(let i=0;i<150;i++){await wait(800);report=await api("/runs/"+r.runId);report.findings=report.findings||[];render();renderRep();if(report.status==="succeeded"||report.status==="failed")break}
+    for(let i=0;i<150;i++){await wait(800);report=await api("/runs/"+r.runId);report.findings=report.findings||[];render();renderRep();renderAI();if(report.status==="succeeded"||report.status==="failed")break}
     if(report.status==="running"||report.status==="queued")toast("Запуск идёт дольше обычного. Откройте отчёт позже: "+r.runId)}
   catch(e){fail(e)}
   finally{running=false;$("#runBtn").disabled=false;$("#runBtn").textContent="Запустить";render();renderRep();renderAI()}};
@@ -406,7 +425,8 @@ function openRep(){$("#rep").classList.remove("min");$("#repToggle").textContent
 $("#repToggle").onclick=()=>{$("#rep").classList.toggle("min");$("#repToggle").textContent=$("#rep").classList.contains("min")?"Развернуть":"Свернуть"};
 function nodeNote(n,s){const o=s.output;
   if(n.type==="ai"&&o){if(o.aiAvailable===false)return`<br><small style="color:var(--bad)">${esc(LLM_ERRORS[o.errorCode]||"Модель недоступна. Находки сохранены.")}</small>`;
-    if(o.aiAvailable)return`<br><small>объяснено: ${o.explained} из ${o.total}${o.limit?` (лимит ${o.limit} самых критичных)`:""}</small>`}
+    if(o.aiAvailable)return`<br><small>${aiDoneText(o)}</small>`;
+    const st=AI_STAGES.find(x=>x[0]===o.stage);if(st&&s.status==="running")return`<br><small>${st[1]}…</small>`}
   if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
   if(!o)return"";if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
 function findingItem(f) {
@@ -484,10 +504,21 @@ function renderChat(scroll = false) {
   input.disabled = button.disabled = !ready || chatState.pending;
   input.placeholder = ready ? "Вопрос по отчёту…" : "Сначала запустите проверку";
   button.textContent = chatState.pending ? "Ждём ответ…" : "Спросить";
+  const waited = chatState.pending ? Math.round((Date.now() - chatState.sentAt) / 1000) : 0;
+  const pendingNote = !chatState.pending ? "" : `<div class="msg">${waited >= 20
+    ? `Модель отвечает дольше обычного (${waited} с). Локальной модели при первом запросе нужно до минуты.`
+    : "Вопрос отправлен, модель отвечает…"}</div>`;
   log.innerHTML = chatState.turns.map(turn =>
-    `<div class="msg ${turn.role === "user" ? "me" : ""}">${esc(turn.content)}</div>`
-  ).join("") + (chatState.error ? `<div class="warn">${esc(chatState.error)}</div>` : "");
+    `<div class="msg ${turn.role === "user" ? "me" : ""}">${turn.role === "user" ? esc(turn.content) : fmtAnswer(turn.content)}</div>`
+  ).join("") + pendingNote + (chatState.error
+    ? `<div class="warn">${esc(chatState.error)}<br><button type="button" class="btn" id="chatRetry">Отправить ещё раз</button></div>` : "");
+  $("#chatRetry")?.addEventListener("click", () => $("#reportChat").requestSubmit());
   if (scroll) log.parentElement.scrollTop = log.parentElement.scrollHeight;
+}
+
+// Ответы модели — обычный текст. Подсвечиваем только `код` и **жирный**, после экранирования.
+function fmtAnswer(text) {
+  return esc(text).replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
 }
 
 $("#reportChat").onsubmit = async event => {
@@ -499,9 +530,11 @@ $("#reportChat").onsubmit = async event => {
   const history = state.turns.slice(-8).map(turn => ({...turn, content: turn.content.slice(0, 2000)}));
   state.turns.push({role: "user", content: question});
   state.pending = true;
+  state.sentAt = Date.now();
   state.error = "";
   input.value = "";
   renderChat(true);
+  const slowTimer = setTimeout(() => { if (chatState === state && state.pending) renderChat(true) }, 20500);
   try {
     const reply = await api(`/runs/${encodeURIComponent(state.runId)}/chat`, {
       method: "POST", headers: JH, body: JSON.stringify({question, history})
@@ -512,6 +545,7 @@ $("#reportChat").onsubmit = async event => {
     state.error = LLM_ERRORS[error.code] || error.message || "Не удалось получить ответ.";
     if (chatState === state) input.value = question;
   } finally {
+    clearTimeout(slowTimer);
     state.pending = false;
     if (chatState === state) {
       renderChat(true);
@@ -520,13 +554,44 @@ $("#reportChat").onsubmit = async event => {
   }
 };
 
+// AI-панель: итог и приоритеты, ниже свёрнутые карточки групп. Пока AI-нода работает, показываем реальные этапы.
+const AI_STAGES=[["preparing","Готовим находки"],["waiting","Ждём ответ модели"],["validating","Проверяем рекомендации"],["done","Готово"]];
+const aiWaitStart={};
+function plural(n,one,few,many){const a=n%10,b=n%100;return`${n} ${a===1&&b!==11?one:a>=2&&a<=4&&(b<12||b>14)?few:many}`}
+function aiDoneText(o){return`объяснено ${o.explained} из ${o.total}${o.limit?` · лимит ${o.limit} самых критичных групп`:""}`}
+function aiStageBox(s){const o=s.output,idx=AI_STAGES.findIndex(x=>x[0]===o.stage);
+  let waited=0;if(o.stage==="waiting"){const k=`${report.runId}:${s.nodeId}:${o.attempt||1}`;aiWaitStart[k]??=Date.now();waited=Math.round((Date.now()-aiWaitStart[k])/1000)}
+  const detail={preparing:o.sent==null?"":`в запрос идут ${o.sent} из ${plural(o.total,"находки","находок","находок")}, ${plural(o.groups,"группа","группы","групп")}`,
+    waiting:[o.attempt>1?"повторный запрос: прошлый ответ не прошёл проверку":"",waited>=3?`${waited} с`:""].filter(Boolean).join(", ")};
+  const items=AI_STAGES.slice(0,idx+1).map(([id,label],i)=>`<li class="${i<idx?"done":"now"}">${label}${detail[id]?` <small>· ${esc(detail[id])}</small>`:""}</li>`).join("");
+  const slow=waited>=30?`<div class="warn" style="margin-top:8px">Модель отвечает дольше обычного. Локальная модель при первом запросе загружается в память, это может занять до минуты.</div>`:"";
+  return`<div class="rec ai-stage"><b>AI обрабатывает отчёт</b><ol>${items}</ol>${slow}</div>`}
+function aiCard(g,open){const fs=g.findingIds.map(id=>(report.findings||[]).find(f=>f.id===id)).filter(Boolean);
+  const picked=fs.some(f=>f.id===pick);
+  return`<details class="ai-card ${picked?"pick":""}" data-g="${esc(g.id)}" ${open.has(g.id)||picked?"open":""}>
+    <summary><span class="sev ${esc(g.severity)}" aria-hidden="true"></span><b>${esc(g.title)}</b>${fs.length>1?`<span class="count">· ${plural(fs.length,"находка","находки","находок")}</span>`:""}<span class="act">${esc(g.action)}</span></summary>
+    <div class="more"><p>${esc(g.explanation)}</p><p><small>${esc(g.rationale)}</small></p><ul>${fs.map(findingItem).join("")}</ul></div></details>`}
 function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
-  const ai=(report?.nodes||[]).map(s=>s.output).filter(o=>o&&"aiAvailable" in o);
-  const failed=ai.find(o=>o.aiAvailable===false);
-  $("#llmTag").textContent=a?"AI-анализ готов":failed?"LLM недоступна":"";
+  const aiRes=(report?.nodes||[]).filter(s=>wf.nodes.find(n=>n.id===s.nodeId)?.type==="ai");
+  const active=aiRes.find(s=>s.status==="running"&&s.output?.stage);
+  const failed=aiRes.map(s=>s.output).find(o=>o?.aiAvailable===false);
+  const done=aiRes.map(s=>s.output).filter(o=>o?.aiAvailable);
+  $("#llmTag").textContent=active?"AI работает…":a?"AI-анализ готов":failed?"LLM недоступна":"";
   renderChat();
-  if(!a){b.innerHTML=`<div class="empty">${failed?esc(LLM_ERRORS[failed.errorCode]||"Модель недоступна. Находки сохранены."):"Добавьте ноду «AI-рекомендации» после анализаторов, чтобы получить советы автоматически, или задайте вопрос по готовому отчёту."}</div>`;return}
-  b.innerHTML=`<div class="rec"><b>Итог</b>${esc(a.summary)}</div>`+a.recommendations.map(r=>{const f=(report.findings||[]).find(x=>x.id===r.findingId);return f?`<div class="rec ${pick===f.id?"pick":""}"><b>${esc(f.file)}${f.line?":"+f.line:""}</b>${esc(r.explanation)}<br><br><i>Что сделать:</i> ${esc(r.remediation)}</div>`:""}).join("")}
+  const sameRun=b.dataset.runId===report?.runId;
+  const open=new Set(sameRun?Array.from(b.querySelectorAll("details[open]"),d=>d.dataset.g):[]);
+  b.dataset.runId=report?.runId||"";
+  const stage=active?aiStageBox(active):"";
+  if(!a){b.innerHTML=stage||`<div class="empty">${failed?esc(LLM_ERRORS[failed.errorCode]||"Модель недоступна. Находки сохранены."):"Добавьте ноду «AI-рекомендации» после анализаторов, чтобы получить советы автоматически, или задайте вопрос по готовому отчёту."}</div>`;return}
+  if(!a.groups?.length){// отчёт старой версии бэкенда: рекомендации по одной находке
+    b.innerHTML=stage+`<div class="rec"><b>Итог</b>${esc(a.summary)}</div>`+a.recommendations.map(r=>{const f=(report.findings||[]).find(x=>x.id===r.findingId);return f?`<div class="rec ${pick===f.id?"pick":""}"><b>${esc(f.file)}${f.line?":"+f.line:""}</b>${esc(r.explanation)}<br><br><i>Что сделать:</i> ${esc(r.remediation)}</div>`:""}).join("");return}
+  const byId=Object.fromEntries(a.groups.map(g=>[g.id,g]));
+  const prio=(a.priorities||[]).filter(p=>byId[p.groupId]);
+  b.innerHTML=stage+`<div class="rec ai-top"><b>Итог</b>${esc(a.summary)}
+    ${prio.length?`<ol>${prio.map(p=>`<li><span class="sev ${esc(byId[p.groupId].severity)}" aria-hidden="true"></span>${esc(p.action)} <small>· ${esc(byId[p.groupId].title)}</small></li>`).join("")}</ol>`:""}
+    ${done.length?`<p style="margin:6px 0 0"><small>${done.map(aiDoneText).join("; ")}</small></p>`:""}</div>`
+    +a.groups.map(g=>aiCard(g,open)).join("");
+  b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{pick=item.dataset.f;renderRep();renderAI()})}
 $("#wfName").oninput=e=>wf.name=e.target.value;
 init();left();render();renderRep();renderAI();ping();
 </script>
