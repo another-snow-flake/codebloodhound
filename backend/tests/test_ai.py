@@ -124,6 +124,12 @@ class ExplainFindingsTest(unittest.TestCase):
         self.assertEqual(len(client.calls), 2)
         self.assertEqual(analysis.groups[0].findingIds, ["id1"])
 
+    def test_answer_with_chinese_text_is_retried(self):
+        broken = answer("G1")
+        broken["groups"][0]["title"] = "Хардкодированные凭据"
+        analysis = explain_findings([finding(1)], FakeClient(broken, answer("G1")))
+        self.assertEqual(analysis.groups[0].title, "Проблема G1")
+
     def test_answer_without_known_groups_is_invalid(self):
         with self.assertRaises(LlmError) as error:
             explain_findings([finding(1)], FakeClient(answer("G7"), {"oops": 1}))

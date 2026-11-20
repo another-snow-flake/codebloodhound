@@ -16,6 +16,7 @@
 - AI показывает этапы работы и группирует рекомендации. Топ действий считается по критичности, а CVE для разных версий одной библиотеки идут в отдельные карточки.
 - Webhook отправляет находки и AI-рекомендации из активной ветки. Доставка проверена в Edge на локальном HTTP-приёмнике с 15 находками из учебного архива.
 - Модель для AI выбирается в настройках редактора без перезапуска API: локальные модели из Ollama или DeepSeek. Проверено в Chrome по шагам DeepSeek → qwen3:4b-instruct → DeepSeek, со сменой модели во время ответа и с не скачанной моделью. DeepSeek проверяли через локальную заглушку с тем же API, потому что реального ключа не было.
+- Локальную модель можно отдать бэкенду на другом компьютере через `tools/start_remote_llm.ps1`: шлюз с ключом и SSH-туннель. Проверено через публичный адрес: без ключа `401`, служебный API Ollama закрыт, AI-нода и чат отвечают (около 10–12 с на qwen3:8b).
 - До сдачи остаются расписание, дополнительные условия и экспорт находок в формате организаторов.
 
 После каждого крупного изменения обновляйте этот блок в том же коммите. Запишите, что заработало, как это проверили и что осталось. Так другой чат или участник команды сможет продолжить с актуального состояния.
@@ -62,6 +63,7 @@ Updated November 20, 2026.
 - The AI panel shows processing stages and groups recommendations. Priorities are ranked by severity, and CVEs for different versions of the same dependency get separate cards.
 - The webhook sends findings and AI recommendations from the active branch. Delivery was tested in Edge with a local HTTP receiver and 15 findings from the training archive.
 - The AI model is chosen in the editor settings without restarting the API: local Ollama models or DeepSeek. Tested in Chrome: DeepSeek → qwen3:4b-instruct → DeepSeek, a switch during an answer, and a model that isn't downloaded. DeepSeek was tested against a local stub with the same API because no real key was available.
+- A remote backend can use this PC's local model through `tools/start_remote_llm.ps1`: an authenticated gateway plus an SSH tunnel. Tested through the public URL: 401 without the key, Ollama's own API blocked, AI node and chat answer in about 10–12 s on qwen3:8b.
 - Scheduled runs, additional conditions, and exporting findings in the organizers' format are still pending.
 
 Update this section in the same commit as each major change. Record what works, how it was verified, and what remains so the next chat or teammate can pick up from here.
@@ -214,6 +216,22 @@ $env:DEEPSEEK_API_KEY = [Net.NetworkCredential]::new('', (Read-Host 'DeepSeek AP
 `LLM_PROVIDER` задаёт модель при запуске API. Потом её можно сменить в настройках редактора (⚙): выбор применяется к следующему запуску AI-ноды и следующему вопросу в чате, а запрос, который уже идёт, заканчивается на прежней модели. Выбор хранится в памяти API и после перезапуска возвращается к `LLM_PROVIDER`. Локальные модели бэкенд запрашивает у сервера по `LOCAL_LLM_BASE_URL` (`/v1/models`) и добавляет к ним список `LOCAL_LLM_MODELS` через запятую. Модель из списка, которой нет на сервере, помечается как не скачанная. Модели DeepSeek задаёт `DEEPSEEK_MODELS` (по умолчанию `DEEPSEEK_MODEL`), без `DEEPSEEK_API_KEY` их выбрать нельзя. Чтобы перейти с локальной модели на DeepSeek, пользователь отмечает согласие на отправку находок. Ключи в редактор не передаются. Для Qwen3 4B берите `qwen3:4b-instruct`: тег `qwen3:4b` в Ollama ведёт на Thinking-версию, у которой рассуждения не отключаются и попадают в ответ. `DEEPSEEK_BASE_URL` (по умолчанию `https://api.deepseek.com`) нужен только для тестов с заглушкой.
 
 `LLM_PROVIDER` sets the model at API startup. You can switch it later in the editor settings (⚙); the choice applies to the next AI node run and chat message, while a request in flight finishes on the previous model. The choice lives in API memory and falls back to `LLM_PROVIDER` after a restart. Local models come from the server at `LOCAL_LLM_BASE_URL` (`/v1/models`) plus the comma-separated `LOCAL_LLM_MODELS`. DeepSeek models come from `DEEPSEEK_MODELS` and need `DEEPSEEK_API_KEY`. Switching from a local model to DeepSeek requires explicit consent in the editor. For Qwen3 4B use `qwen3:4b-instruct`: the `qwen3:4b` tag is the Thinking variant, whose reasoning can't be turned off.
+
+### Модель на другом компьютере / Model on another computer
+
+Если бэкенд работает на одном компьютере, а видеокарта с Ollama стоит на другом, на компьютере с моделью выполните:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\start_remote_llm.ps1
+```
+
+Скрипт запускает `tools/llm_gateway.py` и SSH-туннель через localhost.run, затем печатает две строки. Задайте их в окружении бэкенда перед запуском FastAPI вместе с `LLM_PROVIDER = 'local'` и `LOCAL_LLM_MODEL`. После этого локальные модели появятся в настройках редактора.
+
+- Шлюз слушает только `127.0.0.1` и требует ключ. Он пропускает только `GET /v1/models` и `POST /v1/chat/completions` без потоковой передачи, а служебный API Ollama (скачивание и удаление моделей) снаружи закрыт. Одновременно обрабатывается не больше двух запросов.
+- Ключ создаётся один раз в `%LOCALAPPDATA%\codebloodhound-llm\token.txt` и в git не попадает. Удалите файл, чтобы выпустить новый ключ.
+- Бесплатный туннель получает новый адрес при каждом запуске скрипта, и адрес на бэкенде нужно обновить. Трафик расшифровывается на серверах localhost.run, поэтому передавайте через туннель только учебные данные. Туннели Cloudflare в нашей сети не подключаются: TLS-соединение с их сервером обрывается.
+
+If the backend runs on one computer and Ollama on another, run `tools\start_remote_llm.ps1` on the model's computer. It starts an authenticated gateway (only `/v1/models` and non-streaming `/v1/chat/completions`, at most two requests at a time) and an SSH tunnel through localhost.run, then prints `LOCAL_LLM_BASE_URL` and `LOCAL_LLM_API_KEY` for the backend. The free tunnel gets a new URL on every start, and localhost.run can see the traffic, so send only training data through it.
 
 Провайдер выбирается через `LLM_PROVIDER`. Таймаут по умолчанию — 60 секунд, его можно изменить через `LLM_TIMEOUT_SECONDS`. / Select the provider with `LLM_PROVIDER`. The default timeout is 60 seconds. Override it with `LLM_TIMEOUT_SECONDS`. [DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)
 

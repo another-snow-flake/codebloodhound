@@ -200,6 +200,8 @@ def parse_answer(content: str, groups: Sequence[FindingGroup]) -> AiAnalysis:
         answer = _ModelAnswer.model_validate(json.loads(content))
     except (ValueError, ValidationError):
         raise LlmError("invalid_response", "The model answer does not match the expected schema.") from None
+    if CJK.search(content):  # Qwen sometimes slips into Chinese mid-word; the retry usually fixes it
+        raise LlmError("invalid_response", "The model answer contains Chinese text.")
 
     by_ref = {group.ref: group for group in groups}
     cards: list[AiGroup] = []
