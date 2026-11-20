@@ -280,6 +280,7 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в .kt, .kts, .java, .properties, .yml, .json, .toml и .env. Значения секретов в отчёт не попадают.</p>`;
     else if(n.type==="sca")h+=`<p class="note">Сверяет версии Gradle с Maven-справочником. Загрузите полный учебный архив со справочником или настройте справочник на бэкенде.</p>`;
     else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin-код на ошибки в SQL, настройках TLS и CORS, правилах доступа к маршрутам и записям.</p>`;
+    else if(n.type==="ai")h+=`<p class="note">Объясняет находки из входящих связей и предлагает исправления. Модель выбирается на бэкенде (локальная или DeepSeek). Новых находок AI не добавляет. Если модель недоступна, находки пойдут дальше без рекомендаций.</p>`;
     else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
     h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
   box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
@@ -355,8 +356,11 @@ $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)ret
 // отчёт
 function openRep(){$("#rep").classList.remove("min");$("#repToggle").textContent="Свернуть"}
 $("#repToggle").onclick=()=>{$("#rep").classList.toggle("min");$("#repToggle").textContent=$("#rep").classList.contains("min")?"Развернуть":"Свернуть"};
-function nodeNote(n,s){if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
-  const o=s.output;if(!o)return"";if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
+function nodeNote(n,s){const o=s.output;
+  if(n.type==="ai"&&o){if(o.aiAvailable===false)return`<br><small style="color:var(--bad)">LLM недоступна, находки переданы дальше без рекомендаций</small>`;
+    if(o.aiAvailable)return`<br><small>объяснено: ${o.explained} из ${o.total}${o.limit?` (лимит ${o.limit} самых критичных)`:""}</small>`}
+  if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
+  if(!o)return"";if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
 function findingItem(f) {
   const location = f.line == null ? f.file : f.file + ":" + f.line;
   const advisory = f.cve || f.advisoryId;
@@ -417,9 +421,11 @@ function renderRep(){const b=$("#repBody");if(!report){delete b.dataset.runId;$(
     item.setAttribute("aria-pressed","true");
     renderAI()
   })}
-// AI-панель: на бэкенде AI пока нет, панель показывает аналитику, когда она появится в отчёте
-function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;$("#llmTag").textContent="LLM не подключён";
-  if(!a){b.innerHTML=`<div class="empty">AI-рекомендации и чат появятся, когда бэкенд подключит ноду «AI-рекомендации». Находки уже видны в отчёте.</div>`;return}
+// AI-панель: показывает aiAnalysis из отчёта; статус LLM берётся из вывода AI-нод
+function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
+  const ai=(report?.nodes||[]).map(s=>s.output).filter(o=>o&&"aiAvailable" in o);
+  $("#llmTag").textContent=a?"AI-анализ готов":ai.some(o=>o.aiAvailable===false)?"LLM недоступна":"";
+  if(!a){b.innerHTML=`<div class="empty">${ai.some(o=>o.aiAvailable===false)?"Модель не ответила, поэтому рекомендаций нет. Проверьте настройки LLM на бэкенде. Находки видны в отчёте.":"Добавьте в сценарий ноду «AI-рекомендации» после анализаторов и запустите проверку: здесь появятся объяснения находок и советы по исправлению."}</div>`;return}
   b.innerHTML=`<div class="rec"><b>Итог</b>${esc(a.summary)}</div>`+a.recommendations.map(r=>{const f=(report.findings||[]).find(x=>x.id===r.findingId);return f?`<div class="rec ${pick===f.id?"pick":""}"><b>${esc(f.file)}${f.line?":"+f.line:""}</b>${esc(r.explanation)}<br><br><i>Что сделать:</i> ${esc(r.remediation)}</div>`:""}).join("")}
 $("#chatIn").disabled=$("#chatBtn").disabled=true;$("#chatIn").placeholder="Чат появится вместе с AI на бэкенде";
 $("#wfName").oninput=e=>wf.name=e.target.value;
