@@ -158,7 +158,7 @@ class LlmOptionOut(BaseModel):
     provider: Literal["local", "deepseek"]
     model: str
     available: bool
-    reason: Literal["connection_error", "model_missing", "no_api_key"] | None = None
+    reason: Literal["connection_error", "model_missing", "no_api_key", "budget_exceeded"] | None = None
 
 
 class LlmSettings(BaseModel):

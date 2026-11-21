@@ -9,6 +9,8 @@ from typing import Literal, TypedDict
 
 import httpx
 
+from .llm_budget import DEEPSEEK_BUDGET, BudgetExceeded
+
 
 class ChatMessage(TypedDict):
     role: Literal["system", "user", "assistant"]
@@ -55,6 +57,11 @@ class LlmClient:
             # Qwen3 and other reasoning models think by default; that wastes tokens and can break JSON.
             body["reasoning_effort"] = self.reasoning_effort
 
+        if self.provider == "deepseek":
+            try:
+                DEEPSEEK_BUDGET.acquire()  # the paid provider: count the request before it leaves
+            except BudgetExceeded as error:
+                raise LlmError(error.code, str(error)) from None
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         timeout = httpx.Timeout(self.timeout, connect=min(self.timeout, 5.0))
         try:
@@ -75,6 +82,8 @@ class LlmClient:
             }.get(response.status_code, ("upstream_error", f"The model provider returned HTTP {response.status_code}."))
             raise LlmError(code, message)
 
+        if self.provider == "deepseek":
+            DEEPSEEK_BUDGET.record(_used_tokens(response, body))
         try:
             choice = response.json()["choices"][0]
             finish_reason = choice.get("finish_reason")
@@ -95,6 +104,15 @@ class LlmClient:
         return content
 
 
+def _used_tokens(response: httpx.Response, body: dict) -> int:
+    """Tokens the provider billed; a rough estimate (3 characters per token) if it did not say."""
+    try:
+        usage = response.json()["usage"]
+        return int(usage.get("total_tokens") or usage["prompt_tokens"] + usage["completion_tokens"])
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return (len(json.dumps(body, ensure_ascii=False)) + len(response.text)) // 3
+
+
 Provider = Literal["local", "deepseek"]
 PROBE_TIMEOUT = 3.0
 
@@ -105,7 +123,7 @@ class ModelOption:
     provider: Provider
     model: str
     available: bool
-    reason: str | None = None  # connection_error, model_missing or no_api_key
+    reason: str | None = None  # connection_error, model_missing, no_api_key or budget_exceeded
 
 
 def _timeout() -> float:
@@ -199,8 +217,10 @@ def list_model_options() -> list[ModelOption]:
         options += [ModelOption(_option_id("local", m), "local", m, False, "connection_error") for m in configured]
 
     has_key = bool(os.getenv("DEEPSEEK_API_KEY", "").strip())
+    reason = None if has_key else "no_api_key"
+    reason = reason or DEEPSEEK_BUDGET.exhausted()
     for model in _names("DEEPSEEK_MODELS", os.getenv("DEEPSEEK_MODEL", "deepseek-flash")):
-        options.append(ModelOption(_option_id("deepseek", model), "deepseek", model, has_key, None if has_key else "no_api_key"))
+        options.append(ModelOption(_option_id("deepseek", model), "deepseek", model, reason is None, reason))
     return options
 
 

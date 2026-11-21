@@ -145,6 +145,8 @@ $env:LLM_TIMEOUT_SECONDS = '180'
 $env:PYTHONIOENCODING = 'utf-8'
 # DeepSeek stays optional: with a key in deepseek-key.txt it appears in the editor's model list,
 # and each run still needs the user's consent to send findings outside this PC
+# daily DeepSeek counters (backend/llm_budget.py) survive restarts in this file
+$env:LLM_USAGE_FILE = Join-Path $dir 'llm-usage.json'
 $deepseekFile = Join-Path $dir 'deepseek-key.txt'
 $deepseekModels = Join-Path $dir 'deepseek-models.txt'
 if ((Test-Path $deepseekFile) -and (Get-Content $deepseekFile -Raw).Trim()) {

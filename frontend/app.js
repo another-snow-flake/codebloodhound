@@ -52,6 +52,8 @@ const LLM_ERRORS={
   consent_required:"Подтвердите в настройках отправку находок в DeepSeek.",
   model_missing:"Выбранная модель не скачана на сервере моделей. Скачайте её или выберите другую в настройках.",
   no_api_key:"Для DeepSeek на бэкенде нужен DEEPSEEK_API_KEY.",
+  budget_exceeded:"Дневной лимит DeepSeek на этом сервере исчерпан. Выберите локальную модель в настройках или попробуйте завтра.",
+  usage_limited:"Слишком много запросов к DeepSeek за минуту. Подождите немного и повторите.",
   http_error:"Эта версия бэкенда не поддерживает чат по отчёту."
 };
 const WEBHOOK_ERRORS={
@@ -955,8 +957,8 @@ function tabModel(){return ss.get("cg_model")}
 function activeModel(){return tabModel()||llmSettings?.defaultId||null}
 // что отправить бэкенду: без выбора решает сервер, согласие на DeepSeek привязано к конкретной модели
 function modelChoice(){const id=tabModel();return id?{modelId:id,allowExternal:ss.get("cg_model_consent")===id}:{}}
-function llmReason(o){return{connection_error:"локальный сервер моделей не отвечает. Запущена ли Ollama?",model_missing:`модель не скачана. Выполните ollama pull ${o.model}`,no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY"}[o.reason]||o.reason}
-const CHECK_ERRORS={auth_error:"провайдер отклонил ключ API",billing_error:"на аккаунте провайдера недостаточно средств",connection_error:"сервер модели недоступен",model_missing:"такой модели нет на сервере",timeout:"модель не ответила вовремя",rate_limited:"провайдер ограничил частоту запросов",consent_required:"нужно согласие на отправку в DeepSeek",no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY",unknown_model:"бэкенд не предлагает эту модель"};
+function llmReason(o){return{connection_error:"локальный сервер моделей не отвечает. Запущена ли Ollama?",model_missing:`модель не скачана. Выполните ollama pull ${o.model}`,no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY",budget_exceeded:"дневной лимит DeepSeek на сервере исчерпан"}[o.reason]||o.reason}
+const CHECK_ERRORS={auth_error:"провайдер отклонил ключ API",billing_error:"на аккаунте провайдера недостаточно средств",connection_error:"сервер модели недоступен",model_missing:"такой модели нет на сервере",timeout:"модель не ответила вовремя",rate_limited:"провайдер ограничил частоту запросов",consent_required:"нужно согласие на отправку в DeepSeek",no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY",unknown_model:"бэкенд не предлагает эту модель",budget_exceeded:"дневной лимит DeepSeek на сервере исчерпан",usage_limited:"слишком много запросов к DeepSeek за минуту"};
 async function loadLlm(){const s=$("#llmModel"),st=$("#llmStatus");s.disabled=true;st.textContent="Загружаю список моделей…";$("#llmConsent").checked=false;
   try{llmSettings=await api("/settings/llm")}
   catch(e){llmSettings=null;s.innerHTML="";$("#llmConsentRow").hidden=true;st.innerHTML=`<span style="color:var(--bad)">${esc(e.code==="http_error"?"Эта версия бэкенда не поддерживает выбор модели.":e.message)}</span>`;renderAI();return}

@@ -39,6 +39,7 @@ LLM_ERROR_STATUS = {
     "consent_required": 403, "unknown_model": 422, "no_api_key": 409,
     "not_configured": 503, "bad_config": 503, "connection_error": 503, "model_missing": 503,
     "auth_error": 502, "billing_error": 502, "rate_limited": 429, "timeout": 504,
+    "budget_exceeded": 429, "usage_limited": 429,
 }
 
 
