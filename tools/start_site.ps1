@@ -92,6 +92,16 @@ function Wait-Port([int]$port, [int]$seconds) {
     return $false
 }
 
+function Wait-Postgres([int]$seconds) {
+    $isReady = Join-Path $PgBin 'pg_isready.exe'
+    for ($i = 0; $i -lt $seconds * 2; $i++) {
+        & $isReady -h 127.0.0.1 -p 5432 -q
+        if ($LASTEXITCODE -eq 0) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
 Stop-OwnProcess 'tunnel' { param($p) $p.Name -eq 'ssh.exe' -and $p.CommandLine -like '*80:127.0.0.1:8080*localhost.run*' }
 Stop-OwnProcess 'relay' { param($p) $p.CommandLine -like '*relay_tunnel.ps1*' }
 Stop-OwnProcess 'site' { param($p) $p.CommandLine -like "*serve_site.py*" }
@@ -108,6 +118,9 @@ if (-not (Get-NetTCPConnection -LocalPort 5432 -State Listen -ErrorAction Silent
     Start-Process (Join-Path $PgBin 'pg_ctl.exe') -ArgumentList @('-D', "`"$pgdata`"", '-l', "`"$(Join-Path $logs 'postgres.log')`"", 'start') -WindowStyle Hidden
     if (-not (Wait-Port 5432 20)) { throw "PostgreSQL did not start. See $logs\postgres.log" }
 }
+# The port opens before the database accepts queries: after an unclean shutdown PostgreSQL first
+# replays its log and answers "the database system is starting up", which made FastAPI exit
+if (-not (Wait-Postgres 60)) { throw "PostgreSQL is not ready to accept connections. See $logs\postgres.log" }
 
 try { Invoke-RestMethod http://127.0.0.1:11434/api/tags -TimeoutSec 5 | Out-Null }
 catch { Write-Warning 'Ollama is not running: scans work, AI answers will report that the model is unavailable.' }
