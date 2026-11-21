@@ -9,6 +9,17 @@
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+<dialog class="modal" id="replaceGraph" aria-labelledby="replaceTitle">
+  <form method="dialog">
+    <h2 id="replaceTitle">Сохранить изменения сценария?</h2>
+    <p>После перехода несохранённые изменения будут потеряны.</p>
+    <div class="row">
+      <button class="btn" value="cancel" autofocus>Отмена</button>
+      <button class="btn" value="discard">Продолжить без сохранения</button>
+      <button class="btn pri" value="save">Сохранить и продолжить</button>
+    </div>
+  </form>
+</dialog>
 <div class="app">
 <header>
   <button class="btn ico" id="gear" title="Настройки" aria-label="Настройки">⚙</button>
@@ -128,10 +139,10 @@
 </section>
 </div>
 
-<div class="ov" id="ovSet"><div class="modal">
+<div class="ov" id="ovSet"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
   <button class="x" data-close aria-label="Закрыть">×</button>
-  <h2>Настройки</h2><p class="note">Адрес бэкенда. Страницу нужно открывать с http://localhost:5173 или :3000, иначе бэкенд отклонит запросы (CORS).</p>
-  <label class="f">Адрес API</label><input type="text" id="apiUrl" placeholder="http://127.0.0.1:8000">
+  <h2 id="settingsTitle">Настройки</h2><p class="note">Для этого сайта используйте адрес API по умолчанию. При локальном запуске укажите адрес своего бэкенда.</p>
+  <label class="f" for="apiUrl">Адрес API</label><input type="text" id="apiUrl">
   <label class="f" for="llmModel">Модель для AI-рекомендаций и чата</label>
   <select id="llmModel" aria-describedby="llmStatus"></select>
   <p class="note" id="llmStatus" aria-live="polite"></p>

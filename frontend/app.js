@@ -155,10 +155,10 @@ function render(refreshInspector=true){
     (note?`<div class="nt" title="${esc(note)}" style="-webkit-line-clamp:${noteLines(n)};max-height:${noteLines(n)*15}px">${esc(note)}</div>`:"")+
     (iss?`<span class="badge" aria-label="Проблем: ${iss.count||1}">${iss.count||"!"}</span>`:"")+
     Array.from({length:p.ins},(_,i)=>{const handle=inHandle(n,i+1),isSource=handle==="source";
-      return `<span class="h in${isSource?" scope-port":""}" data-in="${esc(n.id)}" data-hi="${handle||""}" style="top:${portY(n,i+1,p.ins)-7}px" title="${isSource?"Источник (необязательно)":handle?"Вход "+(i+1):"Вход потока"}"></span>`}).join("")+
+      return `<span role="button" tabindex="0" aria-label="${esc(nodeName(n))}: ${isSource?"Источник":handle?"Вход "+(i+1):"Вход потока"}" class="h in${isSource?" scope-port":""}" data-in="${esc(n.id)}" data-hi="${handle||""}" style="top:${portY(n,i+1,p.ins)-7}px" title="${isSource?"Источник (необязательно)":handle?"Вход "+(i+1):"Вход потока"}"></span>`}).join("")+
     Array.from({length:p.outs},(_,i)=>{const h=outHandle(n,i+1),cls=h==="true"?"t":h==="false"?"f":"out",
       label=n.type==="source"?"Путь к файлу или папке":h==="true"?"Выход «да»":h==="false"?"Выход «нет»":"Выход"+(p.outs>1?" "+(i+1):"");
-      return`<span class="h ${cls}" data-out="${esc(n.id)}" data-hd="${h||""}" style="top:${portY(n,i+1,p.outs)-7}px" title="${label}"></span>`}).join("");
+      return`<span role="button" tabindex="0" aria-label="${esc(nodeName(n))}: ${label}" class="h ${cls}" data-out="${esc(n.id)}" data-hd="${h||""}" style="top:${portY(n,i+1,p.outs)-7}px" title="${label}"></span>`}).join("");
     e.style.height=nodeHeight(n)+"px";
     if(sel?.t==="n"&&sel.id===n.id)e.classList.add("sel");
     placeNode(e,n);bd.appendChild(e)}
@@ -213,6 +213,36 @@ bd.addEventListener("wheel",e=>{if(e.ctrlKey||e.metaKey)return;e.preventDefault(
   const scale=e.deltaMode===1?16:e.deltaMode===2?bd.clientHeight:1;
   setPan(pan.x-e.deltaX*scale,pan.y-e.deltaY*scale)
 },{passive:false});
+function connectPorts(src,hd,input){
+  const tid=input.dataset.in,hi=input.dataset.hi||undefined;
+  if(tid===src.id)return toast("Нельзя соединить ноду с самой собой");
+  if((src.type==="source")!==(hi==="source"))return toast("Соедините «Источник» с одноимённым входом сканера");
+  if(hi==="source"&&wf.edges.some(x=>x.target===tid&&x.targetHandle==="source"))return toast("У сканера уже есть источник");
+  if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&(x.sourceHandle??undefined)===hd&&(x.targetHandle??undefined)===hi))return toast("Такая связь уже есть");
+  if(cycle(src.id,tid))return toast("Циклы запрещены: связь замкнёт сценарий");
+  wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{}),...(hi?{targetHandle:hi}:{})});
+  clearReport();
+  return true
+}
+let keyboardPort=null;
+bd.addEventListener("keydown",event=>{
+  const port=event.target.closest("[data-out],[data-in]");
+  if(!port||running)return;
+  if(event.key==="Escape"){keyboardPort=null;return}
+  if(event.key!=="Enter"&&event.key!==" ")return;
+  event.preventDefault();
+  if(port.hasAttribute("data-out")){
+    keyboardPort=port;
+    toast("Выберите вход клавишей Tab и нажмите Enter или пробел");return
+  }
+  if(!keyboardPort?.isConnected)return toast("Сначала выберите выход ноды");
+  const src=wf.nodes.find(n=>n.id===keyboardPort.dataset.out);
+  const handle=keyboardPort.dataset.hd||undefined;
+  keyboardPort=null;
+  if(src&&connectPorts(src,handle,port)){
+    [...bd.querySelectorAll("[data-in]")].find(input=>input.dataset.in===port.dataset.in&&input.dataset.hi===port.dataset.hi)?.focus()
+  }
+});
 bd.addEventListener("pointerdown",ev=>{
   if(ev.button!==0)return;
   const o=ev.target.closest("[data-out]"),nd=ev.target.closest(".node"),ep=ev.target.closest("[data-e]");
@@ -228,13 +258,7 @@ bd.addEventListener("pointerdown",ev=>{
   if(o){ev.preventDefault();const src=wf.nodes.find(n=>n.id===o.dataset.out),hd=o.dataset.hd||undefined,[x1,y1]=pt(src,1,hd);
     const mv=e=>edges([x1,y1,e.clientX-r.left-pan.x,e.clientY-r.top-pan.y]);
     const up=e=>{edges();if(e.type==="pointercancel")return;
-      const t=document.elementFromPoint(e.clientX,e.clientY)?.closest("[data-in]");if(!t)return;const tid=t.dataset.in,hi=t.dataset.hi||undefined;
-      if(tid===src.id)return toast("Нельзя соединить ноду с самой собой");
-      if((src.type==="source")!==(hi==="source"))return toast("Соедините «Источник» с одноимённым входом сканера");
-      if(hi==="source"&&wf.edges.some(x=>x.target===tid&&x.targetHandle==="source"))return toast("У сканера уже есть источник");
-      if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&(x.sourceHandle??undefined)===hd&&(x.targetHandle??undefined)===hi))return toast("Такая связь уже есть");
-      if(cycle(src.id,tid))return toast("Циклы запрещены: связь замкнёт сценарий");
-      wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{}),...(hi?{targetHandle:hi}:{})});clearReport()};
+      const t=document.elementFromPoint(e.clientX,e.clientY)?.closest("[data-in]");if(t)connectPorts(src,hd,t)};
     trackPointer(ev,mv,up);return}
   if(nd&&!ev.target.closest("[data-in]")){const n=wf.nodes.find(x=>x.id===nd.dataset.id);sel={t:"n",id:n.id};
     const ox=ev.clientX-pan.x-n.position.x,oy=ev.clientY-pan.y-n.position.y;
@@ -593,12 +617,30 @@ async function loadMy(){const l=$("#leftList");l.innerHTML=`<div class="empty">�
   try{const list=await api("/workflows");
     if(tab!=="my"||token!==ss.get(accountTokenKey())||API!==origin)return;
     l.innerHTML=list.length?list.map((s,i)=>`<button class="cat" data-i="${i}"><span>${esc(s.name)}<small>${s.languagePlugins?"Личный сценарий":"Общий сценарий"}</small></span></button>`).join(""):`<div class="empty">Сохранённых сценариев пока нет. Откройте «Файл» → «Сохранить».</div>`;
-    l.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{if(running)return toast("Дождитесь завершения проверки");wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()})}
+    l.querySelectorAll("[data-i]").forEach(b=>b.onclick=async()=>{if(running)return toast("Дождитесь завершения проверки");if(!(await canReplaceGraph()))return;wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});savedGraph=graphSnapshot(wf);$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()})}
   catch(e){if(tab==="my"&&token===ss.get(accountTokenKey())&&API===origin)l.innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));left()});
 // сохранение
+let savedGraph;
+function graphSnapshot(graph){return JSON.stringify({name:graph.name,nodes:graph.nodes,edges:graph.edges})}
+async function canReplaceGraph(){
+  if(savedGraph===graphSnapshot(wf))return true;
+  const dialog=$("#replaceGraph");
+  if(dialog.open)return false;
+  const choice=await new Promise(resolve=>{
+    dialog.returnValue="cancel";
+    dialog.addEventListener("close",()=>resolve(dialog.returnValue),{once:true});
+    dialog.showModal()
+  });
+  if(choice==="save"){
+    try{await save();return savedGraph===graphSnapshot(wf)}catch(error){fail(error);return false}
+  }
+  return choice==="discard"
+}
 async function save(){const current=wf;current.name=$("#wfName").value.trim()||"Без названия";
+  const snapshot=graphSnapshot(current);
   const r=await api(current.id?"/workflows/"+current.id:"/workflows",{method:current.id?"PUT":"POST",headers:JH,body:JSON.stringify({name:current.name,nodes:current.nodes,edges:current.edges})});
+  if(wf===current)savedGraph=snapshot;
   current.id=r.id;current.languagePlugins=r.languagePlugins;return r}
 $("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("open")};
 addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
@@ -606,7 +648,7 @@ $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const
   if(running&&a!=="dl")return toast("Дождитесь завершения проверки");
   if(pluginEdit&&a!=="dl")return toast("Сначала сохраните или закройте редактор плагина");
   if(a==="generate")return openGenerator();
-  if(a==="new"){wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()}
+  if(a==="new"){if(!(await canReplaceGraph()))return;wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};savedGraph=graphSnapshot(wf);$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()}
   if(a==="dl"){const{id,...d}=wf;d.name=$("#wfName").value;$("#jsonOut").value=JSON.stringify(d,null,2);$("#ovJson").classList.add("open")}
   if(a==="save"){try{await save();toast("Сценарий сохранён");if(tab==="my")left()}catch(e){fail(e)}}});
 $("#jsonCopy").onclick=async()=>{try{await navigator.clipboard.writeText($("#jsonOut").value);toast("JSON скопирован")}catch(e){$("#jsonOut").select();toast("Выделено — скопируйте вручную")}};
@@ -690,8 +732,9 @@ $("#generateForm").onsubmit=async event=>{
     if(generation===current){$("#generateRun").disabled=false;$("#generatePrompt").disabled=false}
   }
 };
-$("#generateApply").onclick=()=>{
-  if(running||!generation?.draft)return;
+$("#generateApply").onclick=async()=>{
+  if(running||!generation?.draft||!(await canReplaceGraph()))return;
+  savedGraph=null;
   wf={...generation.draft,id:""};
   $("#wfName").value=wf.name;sel=null;focusCanvas();clearReport();
   $("#ovGenerate").classList.remove("open")
@@ -767,7 +810,7 @@ function closeAccountDialog(){
 }
 function resetWorkspace(){
   if(pluginEdit){pluginEdit=null;$("#pluginBar").hidden=true;document.body.classList.remove("plugin-editing");$("#wfName").disabled=false}
-  wf={id:"",name:"Проверка секретов",nodes:[],edges:[]};init();
+  wf={id:"",name:"Проверка секретов",nodes:[],edges:[]};init();savedGraph=graphSnapshot(wf);
   $("#wfName").value=wf.name;
   sourceId=null;sourceName="";sel=null;
   $("#srcTag").textContent="источник не выбран";$("#srcTag").classList.remove("ok");
@@ -1004,8 +1047,8 @@ async function copyTemplate(id,button){
   button.disabled=true;
   try{
     const template=await api("/workflow-templates/"+encodeURIComponent(id));
-    if(!libraryOpen()||running)return;
-    returnToEditor();
+    if(!libraryOpen()||running||!(await canReplaceGraph()))return;
+    savedGraph=null;returnToEditor();
     wf={...template.draft,id:""};$("#wfName").value=wf.name;
     sel=null;focusCanvas();clearReport();
     toast("Копия открыта. Проверьте настройки перед запуском.")
@@ -1087,7 +1130,16 @@ $("#llmCheck").onclick=async()=>{const id=$("#llmModel").value;if(!id)return;
   $("#llmCheck").disabled=true;$("#llmStatus").textContent="Проверяю связь с моделью…";
   try{llmStatusNote(checkText(await checkLlm(id)))}catch(e){llmStatusNote(` <span style="color:var(--bad)">${esc(CHECK_ERRORS[e.code]||e.message)}</span>`)}
   finally{$("#llmCheck").disabled=false}};
-$("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open");loadLlm()};
+const settings=$("#ovSet");
+settings.addEventListener("keydown",e=>{
+  if(e.key!=="Tab")return;
+  const controls=[...settings.querySelectorAll("button,input,select")].filter(el=>!el.disabled&&el.getClientRects().length);
+  const first=controls[0],last=controls.at(-1);
+  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}
+  if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}
+});
+new MutationObserver(()=>{if(!settings.classList.contains("open"))$("#gear").focus()}).observe(settings,{attributes:true,attributeFilter:["class"]});
+$("#gear").onclick=()=>{$("#apiUrl").value=API;$("#apiUrl").placeholder=DEFAULT_API;$("#ovSet").classList.add("open");$("#apiUrl").focus();loadLlm()};
 $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||DEFAULT_API;
   if(next!==API){if(running||sourceLoading)return toast("Адрес API можно сменить после завершения операции");webhookRefs=[];webhookListError="Загрузка получателей…";API=next;account=null;resetWorkspace();showAccount();refreshLibrary();ls.set("cg_api",API);ss.set("cg_model",null);ss.set("cg_model_consent",null);const ok=await ping();if(ok){loadLlm();restoreAccount()}
     return toast(ok?"Бэкенд на связи. Проверьте модель для нового адреса.":"Нет связи с бэкендом по адресу "+API)}
@@ -1384,10 +1436,11 @@ function draftMessage(turn, index) {
     ${turn.warnings.length ? `<ul style="margin:6px 0 0;padding-left:18px">${turn.warnings.map(w => `<li><small>${esc(w)}</small></li>`).join("")}</ul>` : ""}
     <br><button type="button" class="btn pri" data-draft="${index}" ${running ? "disabled" : ""}>Открыть на холсте</button></div>`;
 }
-function openDraft(turn) {
+async function openDraft(turn) {
   if (running) return toast("Дождитесь завершения проверки");
   if (!turn?.draft) return;
-  if (wf.nodes.length > 3 && !confirm("Заменить текущий сценарий на холсте черновиком? Несохранённые изменения пропадут.")) return;
+  if (!(await canReplaceGraph())) return;
+  savedGraph=null;
   wf = JSON.parse(JSON.stringify({...turn.draft, id: ""}));
   wf.nodes.forEach(n => n.config = n.config || {});
   $("#wfName").value = wf.name; sel = null; focusCanvas(); clearReport();
@@ -1500,7 +1553,7 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
     +a.groups.map(g=>aiCard(g,open)).join("");
   b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{pick=item.dataset.f;renderRep();renderAI()})}
 $("#wfName").oninput=e=>wf.name=e.target.value;
-init();left();render();renderRep();renderAI();restoreAccount();showLibraryRoute();ping().then(ok=>ok&&loadLlm());
+init();savedGraph=graphSnapshot(wf);left();render();renderRep();renderAI();restoreAccount();showLibraryRoute();ping().then(ok=>ok&&loadLlm());
 
 // Панели и библиотека
 (()=>{
@@ -1511,5 +1564,5 @@ init();left();render();renderRep();renderAI();restoreAccount();showLibraryRoute(
   $("#chatFab").onclick=()=>{main.classList.add("ai-open");$("#chatIn").focus()};
   document.querySelector('[data-a="zip"]').addEventListener("click",()=>{if(!running)$("#fileIn").click()});
   ["ovSet","ovJson","ovHistory","ovGenerate","ovPublish"].forEach(id=>{const o=$("#"+id);o.addEventListener("pointerdown",e=>{if(e.target===o)o.classList.remove("open")})});
-  addEventListener("keydown",e=>{if(e.key==="Escape")document.querySelectorAll(".ov.open").forEach(o=>o.classList.remove("open"))});
+  addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("#replaceGraph").open)document.querySelectorAll(".ov.open").forEach(o=>o.classList.remove("open"))});
 })();

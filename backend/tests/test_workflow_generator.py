@@ -29,6 +29,18 @@ class WorkflowGeneratorTest(unittest.TestCase):
             "description": "Проверь учебный ZIP на секреты.", "timezone": "Europe/Moscow", **extra,
         })
 
+    def test_requested_count_and_whole_archive_override_model_guesses(self):
+        self.model.complete.return_value = json.dumps({
+            "name": "Draft", "scanners": ["secrets"], "scanPath": "src",
+            "condition": {"conditionMode": "count", "comparison": "ge", "threshold": 2},
+        })
+        result = self.generate(description="Проверь весь ZIP на секреты. Условие: число находок больше 2.")
+        self.assertEqual(result.status_code, 200)
+        nodes = result.json()["draft"]["nodes"]
+        self.assertEqual([node["type"] for node in nodes], ["trigger", "secrets", "condition"])
+        self.assertEqual(nodes[-1]["config"]["comparison"], "gt")
+        self.assertEqual(nodes[-1]["config"]["threshold"], 2)
+
     def test_daily_draft_has_an_explicit_branch_and_no_external_bindings(self):
         self.model.complete.return_value = json.dumps({
             "name": "Проверка учебного проекта",

@@ -91,6 +91,21 @@ ZONE = re.compile(r"\b[A-Z][A-Za-z_]+/[A-Z][A-Za-z_]+(?:/[A-Z][A-Za-z_]+)?\b|\bU
 def _align_with_description(value: dict, description: str) -> dict:
     """Drop parts of the model's answer that the user did not ask for."""
     value = dict(value)
+    path = value.get("scanPath")
+    if isinstance(path, str) and (path in {".", "./", "/", "*", "**"} or not re.search(r"(?<![\w./-])" + re.escape(path) + r"(?![\w/-])", description)):
+        value["scanPath"] = None
+    count = re.search(
+        r"(?:число|количество)\s+находок\s*[:—-]?\s*"
+        r"(больше или равно|меньше или равно|не менее|не более|больше|меньше|равно)\s+(\d+)\b",
+        description, re.I,
+    )
+    if count:
+        operators = {"больше": "gt", "меньше": "lt", "равно": "eq", "не менее": "ge",
+                     "не более": "le", "больше или равно": "ge", "меньше или равно": "le"}
+        previous = value.get("condition")
+        severity = previous.get("countMinSeverity") if isinstance(previous, dict) else None
+        value["condition"] = {"conditionMode": "count", "comparison": operators[count[1].lower()],
+                              "threshold": int(count[2]), "countMinSeverity": severity or "low"}
     mentioned = [kind for kind, pattern in MENTIONS.items() if pattern.search(description)]
     if mentioned and isinstance(value.get("scanners"), list):
         value["scanners"] = mentioned
