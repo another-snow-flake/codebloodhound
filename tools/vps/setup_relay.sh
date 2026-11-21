@@ -63,7 +63,8 @@ systemctl reload ssh 2>/dev/null || systemctl reload sshd
 install -d -m 755 -o caddy -g caddy /var/log/caddy
 cat > /etc/caddy/Caddyfile <<EOF
 # Written by codebloodhound tools/vps/setup_relay.sh
-$DOMAIN {
+# Both names serve the site, so a stale DNS cache for one of them still leaves the other.
+$DOMAIN, www.$DOMAIN {
     encode gzip
     reverse_proxy 127.0.0.1:$PORT {
         transport http {
@@ -80,10 +81,6 @@ $DOMAIN {
             roll_keep 5
         }
     }
-}
-
-www.$DOMAIN {
-    redir https://$DOMAIN{uri} permanent
 }
 EOF
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
