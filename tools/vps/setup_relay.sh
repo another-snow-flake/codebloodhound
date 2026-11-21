@@ -87,6 +87,8 @@ www.$DOMAIN {
 }
 EOF
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# validate runs as root and may create the access log; the caddy service must own it
+chown -R caddy:caddy /var/log/caddy
 systemctl enable caddy >/dev/null 2>&1
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
 
