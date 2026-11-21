@@ -62,9 +62,17 @@ aside{background:var(--panel);min-height:0;display:flex;flex-direction:column}
 .board.panning{cursor:grabbing}
 .canvas-home{position:absolute;bottom:12px;left:12px}
 svg.edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-svg.edges path{fill:none;stroke:var(--mute);stroke-width:2;pointer-events:stroke;cursor:pointer}
-svg.edges path.on{stroke:var(--acc);stroke-width:3}
-svg.edges path.act{stroke:var(--ok)}
+svg.edges path{fill:none;stroke:var(--mute);stroke-width:2;pointer-events:none}
+svg.edges path.hit{stroke:transparent;stroke-width:16;pointer-events:stroke;cursor:pointer}
+svg.edges .edge:hover path.line{stroke:var(--acc);stroke-width:3}
+svg.edges .edge.on path.line{stroke:var(--acc);stroke-width:3}
+svg.edges .edge.act path.line{stroke:var(--ok)}
+svg.edges .edge-x{display:none;cursor:pointer;pointer-events:all}
+svg.edges .edge:hover .edge-x,svg.edges .edge.on .edge-x{display:inline}
+svg.edges .edge-x circle{fill:var(--card);stroke:var(--bad);stroke-width:1.5}
+svg.edges .edge-x path{stroke:var(--bad);stroke-width:2;stroke-linecap:round}
+svg.edges .edge-x:hover circle{fill:var(--bad)}
+svg.edges .edge-x:hover path{stroke:#fff}
 svg.edges text{font-size:11px;fill:var(--mute)}
 .node{position:absolute;left:calc(var(--node-x) + var(--pan-x,0px));top:calc(var(--node-y) + var(--pan-y,0px));width:190px;height:72px;background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;cursor:grab;user-select:none;touch-action:none}
 #edgeLayer{transform:translate(var(--pan-x,0px),var(--pan-y,0px))}
@@ -286,7 +294,7 @@ main.ai-open .fab{visibility:hidden}
 .node.alert-bad.sel,.node.alert-warn.sel{box-shadow:0 0 0 3px var(--hl)}
 .h{border-color:var(--mute);background:var(--card)}
 .h:hover{border-color:var(--hl);background:var(--hl)}
-svg.edges path.on{stroke:var(--hl)}
+svg.edges .edge.on path.line,svg.edges .edge:hover path.line{stroke:var(--hl)}
 .insp{background:var(--card);border:0;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.16);top:72px;right:16px;max-height:calc(100% - 88px);overscroll-behavior:contain}
 .insp h3{overflow-wrap:anywhere}
 main.ai-open .insp{right:372px}

@@ -161,7 +161,10 @@ function edges(tmp){const sv=$("#edgeLayer");let h="";
     const act=!historicalReport&&(sourceResult?.outputs?
       sourceResult.outputs.some(x=>x.nodeId===e.target&&x.port===(e.sourceHandle??null)):
       report?.nodes.find(x=>x.nodeId===e.target)?.status==="succeeded");
-    h+=`<path data-e="${esc(e.id)}" class="${sel?.t==="e"&&sel.id===e.id?"on":""} ${act?"act":""}" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}"/>`;
+    // широкая прозрачная линия ловит клик, «×» в середине кривой удаляет связь одним нажатием
+    const d=`M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`,mx=(x1+x2)/2,my=(y1+y2)/2;
+    h+=`<g class="edge ${sel?.t==="e"&&sel.id===e.id?"on":""} ${act?"act":""}" data-e="${esc(e.id)}"><path class="hit" d="${d}"/><path class="line" d="${d}"/>`+
+      (running?"":`<g class="edge-x" data-del="${esc(e.id)}" transform="translate(${mx},${my})"><title>Удалить связь</title><circle r="9"/><path d="M-3.5,-3.5L3.5,3.5M3.5,-3.5L-3.5,3.5"/></g>`)+`</g>`;
     if(e.sourceHandle)h+=`<text x="${x1+8}" y="${y1-6}">${e.sourceHandle==="true"?"да":e.sourceHandle==="false"?"нет":e.sourceHandle.slice(3)}</text>`}
   if(tmp)h+=`<path d="M${tmp[0]},${tmp[1]} L${tmp[2]},${tmp[3]}" style="stroke-dasharray:5 4;pointer-events:none"/>`;sv.innerHTML=h}
 function cycle(s,t){const seen=new Set();const go=id=>{if(id===s)return true;if(seen.has(id))return false;seen.add(id);return wf.edges.filter(e=>e.source===id).some(e=>go(e.target))};return go(t)}
@@ -205,6 +208,8 @@ bd.addEventListener("pointerdown",ev=>{
     trackPointer(ev,e=>setPan(x+e.clientX,y+e.clientY),()=>bd.classList.remove("panning"));return
   }
   if(running)return;
+  const del=ev.target.closest("[data-del]");
+  if(del){ev.preventDefault();removeEdge(del.dataset.del);return}
   const r=bd.getBoundingClientRect();
   if(o){ev.preventDefault();const src=wf.nodes.find(n=>n.id===o.dataset.out),hd=o.dataset.hd||undefined,[x1,y1]=pt(src,1,hd);
     const mv=e=>edges([x1,y1,e.clientX-r.left-pan.x,e.clientY-r.top-pan.y]);
@@ -222,9 +227,14 @@ bd.addEventListener("pointerdown",ev=>{
     const mv=e=>{n.position.x=Math.round(e.clientX-pan.x-ox);n.position.y=Math.round(e.clientY-pan.y-oy);placeNode(nd,n);edges()};
     trackPointer(ev,mv,render);document.querySelectorAll(".node.sel").forEach(x=>x.classList.remove("sel"));nd.classList.add("sel");inspector();
     if(report&&nodeIssues(n))openRep();return}
-  if(ep){sel={t:"e",id:ep.dataset.e};render();return}
+  if(ep){// второй клик по той же связи в течение 400 мс удаляет её: dblclick теряется, потому что первый клик перерисовывает связи
+    const id=ep.dataset.e,now=Date.now();
+    if(lastEdgeClick.id===id&&now-lastEdgeClick.t<400){lastEdgeClick={};removeEdge(id);return}
+    lastEdgeClick={id,t:now};sel={t:"e",id};render();return}
   sel=null;render()});
 addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
+let lastEdgeClick={};
+function removeEdge(id){if(running)return;wf.edges=wf.edges.filter(e=>e.id!==id);if(sel?.t==="e"&&sel.id===id)sel=null;clearReport();toast("Связь удалена")}
 function clearReport(refreshInspector=true){report=null;historicalReport=false;pick=null;render(refreshInspector);renderRep();renderAI()}
 function del(){if(!sel||running)return;if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
 let webhookRefs=[],webhookListError="";
@@ -278,7 +288,7 @@ function languageOptions(selected){
 }
 function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
   const box=document.createElement("div");box.className="insp";let h="";
-  if(sel.t==="e")h=`<h3>Связь</h3><p class="note">Выбранную связь можно удалить.</p><button class="btn" id="delSel" style="margin-top:8px">Удалить связь</button>`;
+  if(sel.t==="e")h=`<h3>Связь</h3><p class="note">Удалить связь можно кнопкой «×» на ней, двойным кликом или клавишей Delete.</p><button class="btn" id="delSel" style="margin-top:8px">Удалить связь</button>`;
   else{const n=wf.nodes.find(x=>x.id===sel.id),c=n.config;h=`<h3>${esc(nodeName(n))}</h3>`;
     if(n.type==="custom")h+=`<label class="f">Название</label><input type="text" data-c="title" maxlength="40" value="${esc(c.title||"")}">
       <label class="f" for="customScanner">Действие</label><select id="customScanner" data-c="scanner">${scannerOptions(c.scanner)}</select>
