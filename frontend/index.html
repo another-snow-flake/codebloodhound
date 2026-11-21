@@ -241,7 +241,7 @@ main.ai-open #right{display:flex}
 #right .ph{background:var(--head);border:0;padding:9px 14px;gap:8px}
 #right .ph h3{font-size:13px;font-weight:600;color:var(--ink)}
 #right .ph .btn.ico{width:28px;height:28px;background:transparent;font-size:16px}
-#right .ab{background:var(--bg);min-height:220px}
+#right .ab{background:var(--bg);min-height:0}
 #right .chat{background:var(--head);border:0;padding:8px 10px;align-items:center}
 #right .chat input{background:transparent;padding:6px 6px;border-radius:0}
 #right .chat .btn.pri{padding:6px 14px}
@@ -344,24 +344,25 @@ main.ai-open .insp{right:372px}
     <div class="canvas" id="canvas"><div class="board" id="board">
       <svg class="edges" id="edges"><g id="edgeLayer"></g></svg>
     </div>
-    <button class="btn canvas-home" id="canvasHome" title="Перетащите фон, чтобы перемещаться по холсту">К началу графа</button></div>
+      <button class="btn canvas-home" id="canvasHome" title="Перетащите фон, чтобы перемещаться по холсту">К началу графа</button>
+      <button class="fab" id="chatFab" aria-label="Виртуальный помощник" title="Виртуальный помощник">💬</button>
+      <aside id="right">
+        <div class="ph"><h3>Виртуальный помощник</h3><span class="tag" id="llmTag"></span><button class="btn ico" id="aiToggle" aria-label="Закрыть помощника">×</button></div>
+        <div class="ab">
+          <div id="aiBody" class="ai-results"></div>
+          <div id="chatLog" class="chat-log" role="log" aria-label="Чат по отчёту"></div>
+        </div>
+        <form class="chat ab-chat" id="reportChat">
+          <input id="chatIn" placeholder="Вопрос по отчёту…" aria-label="Вопрос по отчёту" maxlength="2000">
+          <button type="submit" class="btn pri" id="chatBtn">Спросить</button>
+        </form>
+      </aside>
+    </div>
     <div class="rep min" id="rep">
       <div class="rh"><b>Отчёт о запуске</b><span class="tag" id="repTag">запусков ещё не было</span><span class="sp"></span><button class="btn" id="runHistory">История запусков</button><button class="btn" id="findingsDownload" hidden>Скачать находки JSON</button><button class="btn" id="repToggle">Развернуть</button></div>
       <div class="rb" id="repBody"></div>
     </div>
   </section>
-  <button class="fab" id="chatFab" aria-label="Виртуальный помощник" title="Виртуальный помощник">💬</button>
-  <aside id="right">
-    <div class="ph"><h3>Виртуальный помощник</h3><span class="tag" id="llmTag"></span><button class="btn ico" id="aiToggle" aria-label="Закрыть помощника">×</button></div>
-    <div class="ab">
-      <div id="aiBody" class="ai-results"></div>
-      <div id="chatLog" class="chat-log" role="log" aria-label="Чат по отчёту"></div>
-    </div>
-    <form class="chat ab-chat" id="reportChat">
-      <input id="chatIn" placeholder="Вопрос по отчёту…" aria-label="Вопрос по отчёту" maxlength="2000">
-      <button type="submit" class="btn pri" id="chatBtn">Спросить</button>
-    </form>
-  </aside>
 </main>
 </div>
 
