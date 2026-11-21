@@ -386,6 +386,7 @@ def execute_plan(
         for edge in edges:
             outgoing[edge.source].append(edge)
     active_contexts: dict[tuple[str, str | None], NodeContext] = {}
+    unique_findings: dict[tuple, Finding] = {}
     report.status = "running"
     storage.save_run(report)
     for node in plan.nodes:
@@ -428,7 +429,15 @@ def execute_plan(
                     findings = SCANNERS[scanner](archive, path, language=language)
                 else:
                     findings = SCANNERS[scanner](archive, path, ALL_LANGUAGES)
-                report.findings.extend(findings)
+                canonical_findings = {}
+                for finding in findings:
+                    key = tuple(finding.model_dump(exclude={"id"}).values())
+                    if key not in unique_findings:
+                        unique_findings[key] = finding
+                        report.findings.append(finding)
+                    canonical = unique_findings[key]
+                    canonical_findings[canonical.id] = canonical
+                findings = list(canonical_findings.values())
                 context.findings.update((finding.id, finding) for finding in findings)
                 result.output = {"findings": [finding.model_dump(mode="json", exclude_unset=True) for finding in findings]}
                 if path is not None:

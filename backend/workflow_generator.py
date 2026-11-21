@@ -83,9 +83,15 @@ NOTIFY = re.compile(r"уведом|оповещ|сообщ|отправ|webhook|
 EXPLAIN = re.compile(r"\bai\b|\bии\b|рекоменд|объясн|совет|нейросет|explain|recommend", re.I)
 CONDITION = re.compile(r"критич|severity|high|critical|medium|низк|средн|высок|больше|меньше|не менее|не более|хотя бы|"
                        r"порог|количеств|регуляр|regex|выражени|если\s+(?:есть|будут|найд|обнаруж)|\bif\b", re.I)
-SCHEDULE = re.compile(r"кажд\w* (?:день|сутки|утро|вечер)|ежедневн|daily|every day|\b\d{1,2}[:.]\d{2}\b", re.I)
+EXCLUDED = re.compile(r"(?:\bбез\b|\bне\s+(?:добавляй|добавлять|запускай|включай|включать|используй)\b"
+                      r"|\b(?:without|exclude|skip|do not (?:add|run|include|use))\b)[^.!?;\n]*?"
+                      r"(?=[.!?;\n]|,\s*(?:затем|потом|добавь|запусти|проверь|then|include)\b|$)", re.I)
+SCHEDULE = re.compile(r"кажд\w* (?:день|сутки|утро|вечер)|ежедневн|\bdaily\b|\bevery day\b", re.I)
+MANUAL = re.compile(r"ручн\w*|вручную|\bmanual(?:ly)?\b|\bno schedule\b", re.I)
+NO_SCHEDULE = re.compile(r"\bбез\s+расписания\b|\bwithout(?: a)? schedule\b", re.I)
 SCHEDULE_TIME = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
 ZONE = re.compile(r"\b[A-Z][A-Za-z_]+/[A-Z][A-Za-z_]+(?:/[A-Z][A-Za-z_]+)?\b|\bUTC\b")
+MOSCOW_TIME = re.compile(r"\bпо\s+(?:москве|московскому\s+времени)\b|\bмск\b|\bmoscow time\b", re.I)
 
 
 def _align_with_description(value: dict, description: str) -> dict:
@@ -106,24 +112,30 @@ def _align_with_description(value: dict, description: str) -> dict:
         severity = previous.get("countMinSeverity") if isinstance(previous, dict) else None
         value["condition"] = {"conditionMode": "count", "comparison": operators[count[1].lower()],
                               "threshold": int(count[2]), "countMinSeverity": severity or "low"}
-    mentioned = [kind for kind, pattern in MENTIONS.items() if pattern.search(description)]
-    if mentioned and isinstance(value.get("scanners"), list):
-        value["scanners"] = mentioned
-    if not NOTIFY.search(description):
+    excluded = " ".join(match[0] for match in EXCLUDED.finditer(description))
+    requested = EXCLUDED.sub(" ", description)
+    mentions = [(match.start(), kind) for kind, pattern in MENTIONS.items() if (match := pattern.search(requested))]
+    scanners = value.get("scanners")
+    if isinstance(scanners, list) and all(isinstance(scanner, str) for scanner in scanners):
+        denied = {kind for kind, pattern in MENTIONS.items() if pattern.search(excluded)}
+        selected = [kind for _, kind in sorted(mentions)] if mentions else scanners
+        value["scanners"] = [kind for kind in selected if kind not in denied]
+    if not NOTIFY.search(requested):
         value["notification"] = None
-    if not EXPLAIN.search(description):
+    if not EXPLAIN.search(requested):
         value["explain"] = False
     if value.get("condition") is not None and not CONDITION.search(description):
         value["condition"] = None
     if value.get("notification") in ("match", "no_match") and value.get("condition") is None:
         value["notification"] = "always"
-    if not SCHEDULE.search(description):
+    if MANUAL.search(requested) or NO_SCHEDULE.search(description) or not SCHEDULE.search(requested):
         value["scheduleTime"] = None
+        value["scheduleTimezone"] = None
     else:
-        time = SCHEDULE_TIME.search(description)
+        time = SCHEDULE_TIME.search(requested)
         value["scheduleTime"] = f"{int(time.group(1)):02d}:{time.group(2)}" if time else value.get("scheduleTime") or "09:00"
-    zone = ZONE.search(description)
-    value["scheduleTimezone"] = zone.group(0) if zone and value.get("scheduleTime") else None
+        zone = ZONE.search(requested)
+        value["scheduleTimezone"] = zone[0] if zone else "Europe/Moscow" if MOSCOW_TIME.search(requested) else None
     return value
 
 

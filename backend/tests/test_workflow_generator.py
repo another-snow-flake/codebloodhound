@@ -41,6 +41,30 @@ class WorkflowGeneratorTest(unittest.TestCase):
         self.assertEqual(nodes[-1]["config"]["comparison"], "gt")
         self.assertEqual(nodes[-1]["config"]["threshold"], 2)
 
+    def test_negated_scanners_and_explicit_scanner_order(self):
+        cases = [
+            ("Ищи только секреты, не добавляй SAST и анализ зависимостей.", ["secrets"]),
+            ("Сначала запусти SAST, затем поиск секретов.", ["sast", "secrets"]),
+        ]
+        for description, expected in cases:
+            with self.subTest(description=description):
+                self.model.complete.return_value = json.dumps({"name": "Draft", "scanners": ["secrets", "sca", "sast"]})
+                response = self.generate(description=description)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual([node["type"] for node in response.json()["draft"]["nodes"]], ["trigger", *expected])
+
+    def test_one_off_time_does_not_schedule_and_moscow_time_overrides_timezone(self):
+        self.model.complete.return_value = json.dumps({"name": "Draft", "scanners": ["secrets"]})
+        for description, expected in [
+            ("Сделай ручную проверку секретов в 09:00 сегодня, без расписания.", {"mode": "manual"}),
+            ("Каждый день в 09:00 по Москве ищи секреты.",
+             {"mode": "daily", "scheduleTime": "09:00", "scheduleTimezone": "Europe/Moscow"}),
+        ]:
+            with self.subTest(description=description):
+                response = self.generate(description=description, timezone="UTC")
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["draft"]["nodes"][0]["config"], expected)
+
     def test_daily_draft_has_an_explicit_branch_and_no_external_bindings(self):
         self.model.complete.return_value = json.dumps({
             "name": "Проверка учебного проекта",

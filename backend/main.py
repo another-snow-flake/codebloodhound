@@ -69,14 +69,15 @@ def create_app(dsn: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        storage.initialize()
-        scheduler = asyncio.create_task(poll_schedules(storage))
-        try:
-            yield
-        finally:
-            scheduler.cancel()
-            with suppress(asyncio.CancelledError):
-                await scheduler
+        with storage.run_owner():
+            storage.initialize()
+            scheduler = asyncio.create_task(poll_schedules(storage))
+            try:
+                yield
+            finally:
+                scheduler.cancel()
+                with suppress(asyncio.CancelledError):
+                    await scheduler
 
     app = FastAPI(title="Cyber Garden Workflow API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(

@@ -1,11 +1,14 @@
 import io
 import unittest
+from pathlib import Path, PurePosixPath
 from unittest.mock import Mock
 from zipfile import ZipFile
 
 from backend.accounts import password_hash, verify_password
+from backend.language_plugins import javascript_issues
 from backend.runner import execute_plan, plan_run, validate_edges
-from backend.schemas import ApiProblem, RunReport, Workflow
+from backend.sca import find_vulnerable_dependencies
+from backend.schemas import ApiProblem, Edge, Node, RunReport, Workflow
 from backend.sources import find_secrets
 
 
@@ -80,6 +83,36 @@ class ScopedScannerTest(unittest.TestCase):
         with self.assertRaises(ApiProblem) as error:
             validate_edges(workflow)
         self.assertEqual(error.exception.code, "invalid_scan_source_edge")
+
+    def test_overlapping_scanners_share_finding_ids_and_count_once(self):
+        workflow = self.workflow("application.properties")
+        original = next(node for node in workflow.nodes if node.id == "s")
+        workflow.nodes.append(original.model_copy(update={"id": "second"}))
+        workflow.nodes.append(Node(id="count", type="condition", position=original.position, config={
+            "conditionMode": "count", "comparison": "gt", "threshold": 1, "countMinSeverity": "low",
+        }))
+        workflow.edges.extend([
+            Edge(id="start-second", source="t", target="second"),
+            Edge(id="scope-second", source="path", target="second", targetHandle="source"),
+            Edge(id="merge-first", source="s", target="count"),
+            Edge(id="merge-second", source="second", target="count"),
+        ])
+        report = RunReport.for_workflow(workflow)
+        execute_plan(Mock(), report, plan_run(workflow), "archive", self.archive)
+        results = {node.nodeId: node.output for node in report.nodes}
+        self.assertEqual(len(report.findings), 1)
+        self.assertEqual(results["s"]["findings"][0]["id"], results["second"]["findings"][0]["id"])
+        self.assertEqual(results["count"], {"mode": "count", "matched": False, "count": 1})
+
+    def test_sca_lockfile_can_be_selected_even_when_build_file_is_outside_scope(self):
+        archive = (Path(__file__).resolve().parents[2] / "samples" / "deps-lockfile.zip").read_bytes()
+        findings = find_vulnerable_dependencies(archive, PurePosixPath("api/gradle.lockfile"))
+        self.assertTrue(findings)
+        self.assertEqual({finding.file for finding in findings}, {"api/gradle.lockfile"})
+
+    def test_javascript_ignores_call_examples_in_strings(self):
+        code = 'const documentation = "Example syntax: eval(x)";\nconst answer = eval(expression);'
+        self.assertEqual(list(javascript_issues(code)), [("js-dynamic-code", 2)])
 
 
 class PasswordHashTest(unittest.TestCase):

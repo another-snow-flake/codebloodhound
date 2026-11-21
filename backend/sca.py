@@ -117,7 +117,7 @@ def load_catalog(data: bytes) -> Catalog:
         raise CatalogUnavailable("The SCA catalog could not be read in the expected Maven JSON format.") from error
 
 
-def gradle_dependencies(data: bytes) -> list[Dependency]:
+def gradle_dependencies(data: bytes, scope: PurePosixPath | None = None) -> list[Dependency]:
     filenames = {"build.gradle.kts", "gradle.properties", "gradle.lockfile"}
     files = dict(read_project_text(data, lambda path: path.name in filenames))
     dependencies = []
@@ -134,7 +134,7 @@ def gradle_dependencies(data: bytes) -> list[Dependency]:
         locks[path.parent] = locked
 
     for path, text in files.items():
-        if path.name != "build.gradle.kts":
+        if path.name != "build.gradle.kts" or not in_scope(path, scope):
             continue
         text = without_comments(text)
         properties = {}
@@ -166,18 +166,16 @@ def gradle_dependencies(data: bytes) -> list[Dependency]:
         for records in modules.values():
             for dep in records:
                 key = dep.path.with_name("build.gradle.kts"), dep.group, dep.artifact, dep.version
-                if key not in declared and re.fullmatch(VERSION, dep.version):
+                if in_scope(dep.path, scope) and key not in declared and re.fullmatch(VERSION, dep.version):
                     dependencies.append(dep)
                     declared.add(key)
     return dependencies
 
 
 def find_vulnerable_dependencies(data: bytes, scope: PurePosixPath | None = None) -> list[Finding]:
-    dependencies = gradle_dependencies(data) if scope is not None else None
-    if dependencies is not None:
-        dependencies = [dep for dep in dependencies if in_scope(dep.path, scope)]
-        if not dependencies:
-            return []
+    dependencies = gradle_dependencies(data, scope) if scope is not None else None
+    if dependencies == []:
+        return []
     catalog = load_catalog(data)
     advisories = defaultdict(list)
     for advisory in catalog.vulnerabilities:

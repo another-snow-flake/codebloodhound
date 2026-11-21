@@ -1,5 +1,7 @@
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from secrets import randbits
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -12,6 +14,7 @@ from .user_plugins import MAX_USER_PLUGINS, PluginDraft
 
 
 DEFAULT_DATABASE_URL = "postgresql://cyber_garden:cyber_garden_dev@127.0.0.1:5432/cyber_garden"
+SCHEMA_LOCK = 580731114500243531
 
 
 def database_url() -> str:
@@ -21,12 +24,27 @@ def database_url() -> str:
 class Storage:
     def __init__(self, dsn: str):
         self.dsn = dsn
+        self.runner_id: int | None = None
 
     def connect(self):
         return psycopg.connect(self.dsn, connect_timeout=5)
 
+    @contextmanager
+    def run_owner(self):
+        # PostgreSQL releases this lock if the process exits or its connection is lost.
+        runner_id = -randbits(62) - 1
+        with self.connect() as connection:
+            connection.autocommit = True
+            connection.execute("SELECT pg_advisory_lock(%s::bigint)", (runner_id,))
+            self.runner_id = runner_id
+            try:
+                yield
+            finally:
+                self.runner_id = None
+
     def initialize(self, *, recover_interrupted: bool = True):
         with self.connect() as connection:
+            connection.execute("SELECT pg_advisory_xact_lock(%s::bigint)", (SCHEMA_LOCK,))
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS accounts (
                     id TEXT PRIMARY KEY,
@@ -79,6 +97,7 @@ class Storage:
             """)
             connection.execute("CREATE INDEX IF NOT EXISTS user_plugins_owner_idx ON user_plugins (owner_id)")
             connection.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, body JSONB NOT NULL)")
+            connection.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS runner_id BIGINT")
             connection.execute("""
                 CREATE INDEX IF NOT EXISTS runs_workflow_history_idx
                 ON runs ((body ->> 'workflowId'), (body ->> 'createdAt') DESC NULLS LAST, id DESC)
@@ -102,7 +121,10 @@ class Storage:
             if not recover_interrupted:
                 return
             interrupted = connection.execute("""
-                SELECT body FROM runs WHERE body ->> 'status' IN ('queued', 'running') FOR UPDATE
+                SELECT body FROM runs
+                WHERE body ->> 'status' IN ('queued', 'running')
+                  AND (runner_id IS NULL OR pg_try_advisory_xact_lock(runner_id))
+                FOR UPDATE
             """).fetchall()
             for (body,) in interrupted:
                 report = RunReport.model_validate(body)
@@ -334,12 +356,11 @@ class Storage:
         with self.connect() as connection:
             self._save_run(connection, report)
 
-    @staticmethod
-    def _save_run(connection, report: RunReport):
+    def _save_run(self, connection, report: RunReport):
         connection.execute("""
-            INSERT INTO runs (id, body) VALUES (%s, %s)
+            INSERT INTO runs (id, body, runner_id) VALUES (%s, %s, %s)
             ON CONFLICT(id) DO UPDATE SET body = excluded.body
-        """, (report.runId, Jsonb(report.model_dump(mode="json", exclude_unset=True))))
+        """, (report.runId, Jsonb(report.model_dump(mode="json", exclude_unset=True)), self.runner_id))
 
     def claim_daily_run(self, now: datetime) -> tuple[Workflow, RunReport, str, bytes] | None:
         with self.connect() as connection:

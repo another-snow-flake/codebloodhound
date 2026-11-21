@@ -86,16 +86,16 @@ const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:
 // локальная разработка: API на :8000; сайт через tools/serve_site.py: API на том же адресе под /api
 const DEFAULT_API=["5173","3000"].includes(location.port)||location.protocol==="file:"?"http://127.0.0.1:8000":location.origin+"/api";
 let API=ls.get("cg_api")||DEFAULT_API;
-const accountTokenKey=()=>"cg_account_session:"+API;
+const accountTokenKey=(origin=API)=>"cg_account_session:"+origin;
 let account=null;
-async function api(path,opt){let r;
-  const token=ss.get(accountTokenKey()),headers=new Headers(opt?.headers);
+async function api(path,opt,origin=API){let r;
+  const token=ss.get(accountTokenKey(origin)),headers=new Headers(opt?.headers);
   if(token)headers.set("X-CodeBloodhound-Session",token);
-  try{r=await fetch(API+path,{...opt,headers,redirect:token?"error":"follow"})}catch(e){throw{code:"network",message:`Нет связи с бэкендом (${API}). Проверьте, что uvicorn запущен и страница открыта с http://localhost:5173 или :3000: другие адреса бэкенд не пускает (CORS).`}}
+  try{r=await fetch(origin+path,{...opt,headers,redirect:token?"error":"follow"})}catch(e){throw{code:"network",message:`Не удалось связаться с API (${origin}). Проверьте адрес API и подключение, затем повторите запрос.`}}
   let b=null;try{b=await r.json()}catch(e){}
   if(!r.ok){let m=ERR[b?.code]||WEBHOOK_ERRORS[b?.code]||b?.message||"Ошибка "+r.status;
     if(b?.code==="unsupported_node"){const t=/The (\w+) node/.exec(b.message||"")?.[1];m=`Нода «${T[t]?.n||t}» пока не выполняется бэкендом. Уберите её из сценария, чтобы запустить.`}
-    throw{code:b?.code||"http_"+r.status,message:ACCOUNT_ERRORS[b?.code]||m}}
+    throw{code:b?.code||"http_"+r.status,status:r.status,message:ACCOUNT_ERRORS[b?.code]||m}}
   return b}
 const JH={"Content-Type":"application/json"};
 let wf={id:"",name:"Поиск секретов",nodes:[],edges:[]};
@@ -273,7 +273,7 @@ bd.addEventListener("pointerdown",ev=>{
 addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
 let lastEdgeClick={};
 function removeEdge(id){if(running)return;wf.edges=wf.edges.filter(e=>e.id!==id);if(sel?.t==="e"&&sel.id===id)sel=null;clearReport();toast("Связь удалена")}
-function clearReport(refreshInspector=true){report=null;historicalReport=false;pick=null;render(refreshInspector);renderRep();renderAI()}
+function clearReport(refreshInspector=true){report=null;historicalReport=false;pick=null;render(refreshInspector);renderRep();renderAI();refreshRunButton()}
 function del(){if(!sel||running)return;
   if(sel.t==="n"&&["plugin_input","plugin_output"].includes(wf.nodes.find(n=>n.id===sel.id)?.type))return toast("Число входов и выходов меняется в «Настройках» плагина");
   if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
@@ -624,16 +624,19 @@ document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{tab=b.datase
 let savedGraph;
 function graphSnapshot(graph){return JSON.stringify({name:graph.name,nodes:graph.nodes,edges:graph.edges})}
 async function canReplaceGraph(){
-  if(savedGraph===graphSnapshot(wf))return true;
+  const current=wf;
+  if(savedGraph===graphSnapshot(current)&&!pluginEdit)return true;
   const dialog=$("#replaceGraph");
   if(dialog.open)return false;
+  $("#replaceSave").hidden=!!pluginEdit;
   const choice=await new Promise(resolve=>{
     dialog.returnValue="cancel";
     dialog.addEventListener("close",()=>resolve(dialog.returnValue),{once:true});
     dialog.showModal()
   });
+  if(wf!==current)return false;
   if(choice==="save"){
-    try{await save();return savedGraph===graphSnapshot(wf)}catch(error){fail(error);return false}
+    try{await save();return wf===current&&savedGraph===graphSnapshot(current)}catch(error){fail(error);return false}
   }
   return choice==="discard"
 }
@@ -733,7 +736,8 @@ $("#generateForm").onsubmit=async event=>{
   }
 };
 $("#generateApply").onclick=async()=>{
-  if(running||!generation?.draft||!(await canReplaceGraph()))return;
+  if(running||pluginEdit||!generation?.draft||!(await canReplaceGraph()))return;
+  if(running||pluginEdit)return;
   savedGraph=null;
   wf={...generation.draft,id:""};
   $("#wfName").value=wf.name;sel=null;focusCanvas();clearReport();
@@ -750,7 +754,11 @@ async function loadWebhookRefs(){
   webhookListError=error;
   if(sel?.t==="n"&&wf.nodes.some(n=>n.id===sel.id&&n.type==="notify"))inspector()
 }
-async function ping(){const t=$("#apiTag");try{await api("/health");t.textContent="бэкенд на связи";t.classList.add("ok");loadWebhookRefs();return true}catch(e){t.textContent="нет связи с бэкендом";t.classList.remove("ok");webhookRefs=[];webhookListError="Нет связи с бэкендом.";inspector();return false}}
+async function checkBackend(origin){
+  const response=await api("/health",{signal:AbortSignal.timeout(8000)},origin);
+  if(response?.status!=="ok")throw {message:"Адрес не вернул корректный статус API."}
+}
+async function ping(){const t=$("#apiTag"),origin=API;try{await checkBackend(origin);if(API!==origin)return false;t.textContent="бэкенд на связи";t.classList.add("ok");loadWebhookRefs();return true}catch(e){if(API!==origin)return false;t.textContent="нет связи с бэкендом";t.classList.remove("ok");webhookRefs=[];webhookListError="Нет связи с бэкендом.";inspector();return false}}
 // выбор модели: у каждой вкладки свой (sessionStorage), модель уходит с каждым запуском и вопросом в чате
 let llmSettings=null;
 const PROVIDERS={local:"локальная",deepseek:"DeepSeek API"};
@@ -813,6 +821,7 @@ function resetWorkspace(){
   wf={id:"",name:"Проверка секретов",nodes:[],edges:[]};init();savedGraph=graphSnapshot(wf);
   $("#wfName").value=wf.name;
   sourceId=null;sourceName="";sel=null;
+  chatState={runId:null,turns:[],pending:false,error:""};$("#chatIn").value="";
   $("#srcTag").textContent="источник не выбран";$("#srcTag").classList.remove("ok");
   focusCanvas();clearReport();if(tab==="my")left()
 }
@@ -849,7 +858,7 @@ accountDialog.addEventListener("pointerdown",event=>{
   if(event.target===accountDialog)closeAccountDialog()
 });
 document.addEventListener("keydown",event=>{
-  if(event.key!=="Escape")return;
+  if(event.key!=="Escape"||$("#replaceGraph").open)return;
   if(accountDialog.classList.contains("open"))closeAccountDialog();
   else if(accountMenu.classList.contains("open")){setAccountMenu(false);accountButton.focus()}
 });
@@ -867,9 +876,10 @@ async function submitCredentials(event,mode){
     confirmation.setAttribute("aria-invalid","true");confirmation.focus();
     status.textContent=ACCOUNT_ERRORS.password_mismatch;return
   }
-  form.querySelectorAll('input[type="password"]').forEach(field=>field.value="");
   accountPending=true;button.disabled=true;status.textContent="";
   try{
+    if(!(await canReplaceGraph()))return;
+    form.querySelectorAll('input[type="password"]').forEach(field=>field.value="");
     const session=await api("/accounts/"+mode,{method:"POST",headers:JH,body:JSON.stringify(credentials)});
     if(API!==origin)return;
     form.reset();
@@ -889,7 +899,7 @@ $("#logoutBtn").onclick=async()=>{
   if(running||sourceLoading)return toast("Дождитесь завершения текущей операции");
   const key=accountTokenKey(),token=ss.get(key);
   accountPending=true;
-  try{await api("/accounts/logout",{method:"POST"})}
+  try{if(!(await canReplaceGraph()))return;await api("/accounts/logout",{method:"POST"})}
   catch(error){if(error.code!=="invalid_session")return fail(error)}
   finally{accountPending=false}
   if(ss.get(key)===token)ss.set(key,null);
@@ -1044,10 +1054,12 @@ function templateCard(template){
 }
 async function copyTemplate(id,button){
   if(running)return toast("Дождитесь завершения проверки");
+  if(pluginEdit)return toast("Закройте редактор плагина, чтобы открыть сценарий");
   button.disabled=true;
   try{
     const template=await api("/workflow-templates/"+encodeURIComponent(id));
-    if(!libraryOpen()||running||!(await canReplaceGraph()))return;
+    if(!libraryOpen()||running||pluginEdit||!(await canReplaceGraph()))return;
+    if(!libraryOpen()||running||pluginEdit)return;
     savedGraph=null;returnToEditor();
     wf={...template.draft,id:""};$("#wfName").value=wf.name;
     sel=null;focusCanvas();clearReport();
@@ -1141,16 +1153,29 @@ settings.addEventListener("keydown",e=>{
 new MutationObserver(()=>{if(!settings.classList.contains("open"))$("#gear").focus()}).observe(settings,{attributes:true,attributeFilter:["class"]});
 $("#gear").onclick=()=>{$("#apiUrl").value=API;$("#apiUrl").placeholder=DEFAULT_API;$("#ovSet").classList.add("open");$("#apiUrl").focus();loadLlm()};
 $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||DEFAULT_API;
-  if(next!==API){if(running||sourceLoading)return toast("Адрес API можно сменить после завершения операции");webhookRefs=[];webhookListError="Загрузка получателей…";API=next;account=null;resetWorkspace();showAccount();refreshLibrary();ls.set("cg_api",API);ss.set("cg_model",null);ss.set("cg_model_consent",null);const ok=await ping();if(ok){loadLlm();restoreAccount()}
-    return toast(ok?"Бэкенд на связи. Проверьте модель для нового адреса.":"Нет связи с бэкендом по адресу "+API)}
+  if(next!==API){
+    if(running||sourceLoading||accountPending)return toast("Адрес API можно сменить после завершения операции");
+    const button=$("#setSave"),origin=API;
+    button.disabled=true;
+    try{
+      await checkBackend(next);
+      if(API!==origin||running||sourceLoading||accountPending||!settings.classList.contains("open"))return;
+      if(!(await canReplaceGraph()))return;
+      if(API!==origin||running||sourceLoading||accountPending)return;
+      webhookRefs=[];webhookListError="Загрузка получателей…";API=next;account=null;resetWorkspace();showAccount();refreshLibrary();ls.set("cg_api",API);ss.set("cg_model",null);ss.set("cg_model_consent",null);
+      if(await ping()){loadLlm();restoreAccount();toast("Бэкенд на связи. Проверьте модель для нового адреса.")}
+    }catch(error){fail(error)}
+    finally{button.disabled=false}
+    return
+  }
   const id=$("#llmModel").value;
-  if(llmSettings&&id&&id!==activeModel()){
-    const external=!$("#llmConsentRow").hidden;
-    if(external&&!$("#llmConsent").checked)return toast("Подтвердите, что находки можно отправлять в DeepSeek");
+  const needsConsent=!$("#llmConsentRow").hidden;
+  if(llmSettings&&id&&(id!==activeModel()||needsConsent)){
+    if(needsConsent&&!$("#llmConsent").checked)return toast("Подтвердите, что находки можно отправлять в DeepSeek");
     $("#setSave").disabled=true;$("#llmStatus").textContent="Проверяю связь с моделью перед сменой…";
     let r;try{r=await checkLlm(id)}catch(e){r={ok:false,code:e.code,message:e.message}}finally{$("#setSave").disabled=false}
     if(!r.ok){$("#llmModel").value=activeModel()||"";llmStatusNote(checkText(r)+" Оставлена прежняя модель.");return}
-    ss.set("cg_model",id);if(external)ss.set("cg_model_consent",id);
+    ss.set("cg_model",id);if(needsConsent)ss.set("cg_model_consent",id);
     renderAI();$("#ovSet").classList.remove("open");
     return toast(`Модель в этой вкладке: ${modelLabel(id)}. Ответ за ${r.seconds} с.`)}
   $("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
@@ -1196,6 +1221,30 @@ $("#repoBtn").onclick=()=>{
 $("#repoUrl").onkeydown=e=>{if(e.key==="Enter")$("#repoBtn").click()};
 // запуск
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
+const pendingRun=()=>report?.workflowId===wf.id&&["queued","running"].includes(report.status);
+function refreshRunButton(){
+  $("#runBtn").disabled=running;
+  $("#runBtn").textContent=running?"Идёт запуск…":pendingRun()?"Продолжить просмотр":"Запустить"
+}
+async function pollRun(runId){
+  let failures=0;
+  for(let i=0;i<150;i++){
+    await wait(failures?800*2**failures:800);
+    try{
+      const next=await api("/runs/"+encodeURIComponent(runId));
+      if(next?.runId!==runId||!["queued","running","succeeded","failed"].includes(next.status))
+        throw {code:"invalid_run_status",message:"API вернул некорректный статус проверки."};
+      report=next;
+      failures=0;
+    }catch(error){
+      if((!["network","invalid_run_status"].includes(error.code)&&![502,503,504].includes(error.status))||++failures>3)throw error;
+      continue
+    }
+    report.findings=report.findings||[];render();renderRep();renderAI();
+    if(!pendingRun())return
+  }
+  toast("Проверка ещё выполняется. Нажмите «Продолжить просмотр», чтобы обновить отчёт.")
+}
 function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length!==1)return"В сценарии должен быть ровно один запуск";
   const disconnected=wf.nodes.find(n=>n.type!=="trigger"&&n.type!=="source"&&!wf.edges.some(e=>e.target===n.id&&e.targetHandle!=="source"));
   if(disconnected)return `Подключите ноду «${nodeName(disconnected)}» к потоку сценария.`;
@@ -1206,19 +1255,29 @@ function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length
   return null}
 $("#runBtn").onclick=async()=>{if(running)return;
   if(pluginEdit)return toast("Это редактор плагина. Сохраните плагин, добавьте его на холст сценария и запустите сценарий.");
-  const err=validate();if(err)return toast(err);
-  if(sourceLoading)return toast("Дождитесь загрузки проекта");
+  const resume=pendingRun();
   const schedule=wf.nodes.find(n=>n.type==="trigger"&&n.config.mode==="daily")?.config;
   const runSource=sourceId||schedule?.scheduleSourceId;
-  if(!runSource){$("#src").classList.add("need");return toast("Загрузите учебный ZIP или репозиторий по ссылке")}
-  running=true;$("#runBtn").disabled=true;$("#runBtn").textContent="Идёт запуск…";pick=null;inspector();renderChat();
-  try{await save();
-    const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource,...modelChoice()})});
-    historicalReport=false;report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};openRep();render();renderRep();renderAI();
-    for(let i=0;i<150;i++){await wait(800);report=await api("/runs/"+r.runId);report.findings=report.findings||[];render();renderRep();renderAI();if(report.status==="succeeded"||report.status==="failed")break}
-    if(report.status==="running"||report.status==="queued")toast("Запуск идёт дольше обычного. Откройте отчёт позже: "+r.runId)}
-  catch(e){fail(e)}
-  finally{running=false;$("#runBtn").disabled=false;$("#runBtn").textContent="Запустить";render();renderRep();renderAI()}};
+  if(!resume){
+    const err=validate();if(err)return toast(err);
+    if(sourceLoading)return toast("Дождитесь загрузки проекта");
+    if(!runSource){$("#src").classList.add("need");return toast("Загрузите учебный ZIP или репозиторий по ссылке")}
+  }
+  running=true;refreshRunButton();pick=null;inspector();renderChat();
+  try{
+    if(!resume){
+      await save();
+      const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource,...modelChoice()})});
+      historicalReport=false;report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};
+    }
+    openRep();render();renderRep();renderAI();
+    await pollRun(report.runId);
+  }catch(error){
+    if(error.code==="run_not_found"&&pendingRun())clearReport();
+    fail(error)
+  }finally{
+    running=false;refreshRunButton();render();renderRep();renderAI()
+  }};
 // отчёт
 function openRep(){$("#rep").classList.remove("min");$("#repToggle").textContent="Свернуть"}
 $("#repToggle").onclick=()=>{$("#rep").classList.toggle("min");$("#repToggle").textContent=$("#rep").classList.contains("min")?"Развернуть":"Свернуть"};
@@ -1401,6 +1460,7 @@ let chatState = {runId: null, turns: [], pending: false, error: ""};
 // Ассистент: без готового отчёта любое сообщение — описание проверки, из него строится черновик сценария.
 // С отчётом черновик строится по просьбам «создай/сгенерируй/сделай сценарий…», остальное — вопрос по отчёту.
 const GENERATE_INTENT=/(созда|сгенер|сделай|сделать|построй|собери|составь|настрой|нарисуй|добавь сценар)[а-яё]*\s.{0,60}?(сценари|проект|граф|workflow|пайплайн|провер|нод)/i;
+const ENGLISH_GENERATE_INTENT=/\b(?:create|generate|build|design|draft|set up|make)\b.{0,80}\b(?:workflow|pipeline|scenario)\b/i;
 function chatReady(){return !running&&report&&["succeeded","failed"].includes(report.status)}
 function renderChat(scroll = false) {
   const ready = chatReady();
@@ -1408,9 +1468,10 @@ function renderChat(scroll = false) {
   const input = $("#chatIn");
   const button = $("#chatBtn");
   const log = $("#chatLog");
-  if (chatState.runId !== runId) {
-    chatState = {runId, turns: [], pending: false, error: ""};
-    input.value = "";
+  if (chatState.runId !== runId && !chatState.pending) {
+    const {turns,generating,error}=chatState;
+    chatState = {runId, turns: turns.filter(turn=>turn.generation), pending: false, error: generating?error:""};
+    if(!generating)input.value = "";
   }
   input.disabled = button.disabled = running || chatState.pending;
   input.placeholder = running ? "Дождитесь завершения проверки" : ready ? "Вопрос по отчёту или «создай сценарий…»" : "Опишите проверку — соберу сценарий";
@@ -1434,12 +1495,14 @@ function draftMessage(turn, index) {
   const nodes = turn.draft.nodes.map(nodeName).join(" → ");
   return `<div class="msg"><b>Черновик: ${esc(turn.draft.name)}</b><br><small>${esc(nodes)}</small>
     ${turn.warnings.length ? `<ul style="margin:6px 0 0;padding-left:18px">${turn.warnings.map(w => `<li><small>${esc(w)}</small></li>`).join("")}</ul>` : ""}
-    <br><button type="button" class="btn pri" data-draft="${index}" ${running ? "disabled" : ""}>Открыть на холсте</button></div>`;
+    <br><button type="button" class="btn pri" data-draft="${index}" ${running||pluginEdit ? "disabled" : ""}>Открыть на холсте</button></div>`;
 }
 async function openDraft(turn) {
   if (running) return toast("Дождитесь завершения проверки");
+  if (pluginEdit) return toast("Закройте редактор плагина, чтобы открыть сценарий на основном холсте");
   if (!turn?.draft) return;
   if (!(await canReplaceGraph())) return;
+  if (running||pluginEdit)return;
   savedGraph=null;
   wf = JSON.parse(JSON.stringify({...turn.draft, id: ""}));
   wf.nodes.forEach(n => n.config = n.config || {});
@@ -1472,9 +1535,10 @@ $("#reportChat").onsubmit = async event => {
   const question = input.value.trim();
   const state = chatState;
   if (!question || state.pending || running) return;
-  const generate = !state.runId || GENERATE_INTENT.test(question);
-  const history = state.turns.filter(turn => !turn.draft).slice(-8).map(turn => ({role: turn.role, content: turn.content.slice(0, 2000)}));
-  state.turns.push({role: "user", content: question});
+  const generate = !chatReady() || GENERATE_INTENT.test(question) || ENGLISH_GENERATE_INTENT.test(question);
+  if(generate&&pluginEdit)return toast("Закройте редактор плагина, чтобы создать сценарий");
+  const history = state.turns.filter(turn => !turn.generation).slice(-8).map(turn => ({role: turn.role, content: turn.content.slice(0, 2000)}));
+  state.turns.push({role: "user", content: question, generation:generate});
   state.pending = true;
   state.generating = generate;
   state.sentAt = Date.now();
@@ -1486,9 +1550,9 @@ $("#reportChat").onsubmit = async event => {
     if (generate) {
       const choice = modelChoice();
       const result = await api("/workflows/generate", {method: "POST", headers: JH, body: JSON.stringify({
-        description: question.slice(0, 1000), ...choice, timezone: TRIGGER_DEFAULTS.scheduleTimezone
+        description: question, ...choice, timezone: TRIGGER_DEFAULTS.scheduleTimezone
       })});
-      state.turns.push({role: "assistant", content: `Черновик сценария «${result.draft.name}»`, draft: result.draft, warnings: draftWarnings(result)});
+      state.turns.push({role: "assistant", content: `Черновик сценария «${result.draft.name}»`, draft: result.draft, warnings: draftWarnings(result), generation:true});
     } else {
       const reply = await api(`/runs/${encodeURIComponent(state.runId)}/chat`, {
         method: "POST", headers: JH, body: JSON.stringify({question, history, ...modelChoice()})

@@ -21,6 +21,7 @@ JS_RULES = {
     "js-dynamic-code": re.compile(r"\b(?:eval\s*\(|new\s+Function\s*\()"),
     "js-html-assignment": re.compile(r"\.(?:innerHTML|outerHTML)\s*=(?!=|>)"),
 }
+JS_STRING = re.compile(r'''"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|`(?:\\.|[^`\\$]|\$(?!\{))*`''', re.S)
 
 
 def active_suffixes(plugins: Sequence[str]) -> frozenset[str]:
@@ -50,7 +51,8 @@ def python_issues(source: str) -> Iterator[tuple[str, int]]:
 
 
 def javascript_issues(source: str) -> Iterator[tuple[str, int]]:
-    for line, text in enumerate(without_comments(source).splitlines(), start=1):
+    code = JS_STRING.sub(lambda match: re.sub(r"[^\r\n]", " ", match[0]), without_comments(source))
+    for line, text in enumerate(code.splitlines(), start=1):
         for rule, pattern in JS_RULES.items():
             if pattern.search(text):
                 yield rule, line
