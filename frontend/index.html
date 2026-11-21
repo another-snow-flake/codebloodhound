@@ -520,7 +520,7 @@ function nodeNote(n,s){const o=s.output;
     const reason=WEBHOOK_ERRORS[o.errorCode]||(o.statusCode?`Получатель вернул HTTP ${o.statusCode}.`:s.error);
     return `<br><small style="color:var(--bad)">${esc(reason)}</small>`
   }
-  if(n.type==="ai"&&o){if(o.aiAvailable===false)return`<br><small style="color:var(--bad)">${esc(LLM_ERRORS[o.errorCode]||"Модель недоступна. Находки сохранены.")}</small>`;
+  if(n.type==="ai"&&o){if(o.aiAvailable===false)return`<br><small style="color:var(--bad)">${esc(LLM_ERRORS[o.errorCode]||"Модель недоступна. Находки сохранены.")}${o.fallback?" Показаны карточки без нейросети.":""}</small>`;
     if(o.aiAvailable)return`<br><small>${aiDoneText(o)}</small>`;
     const st=AI_STAGES.find(x=>x[0]===o.stage);if(st&&s.status==="running")return`<br><small>${st[1]}…</small>`}
   if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
@@ -654,7 +654,7 @@ $("#reportChat").onsubmit = async event => {
 const AI_STAGES=[["preparing","Готовим находки"],["waiting","Ждём ответ модели"],["validating","Проверяем рекомендации"],["done","Готово"]];
 const aiWaitStart={};
 function plural(n,one,few,many){const a=n%10,b=n%100;return`${n} ${a===1&&b!==11?one:a>=2&&a<=4&&(b<12||b>14)?few:many}`}
-function aiDoneText(o){return`объяснено ${o.explained} из ${o.total}${o.limit?` · лимит ${o.limit} самых критичных групп`:""}${o.model?` · ${esc(modelLabel(o.model))}`:""}`}
+function aiDoneText(o){return`объяснено ${o.explained} из ${o.total}${o.limit?` · лимит ${o.limit} самых критичных групп`:""}${o.model?` · ${esc(modelLabel(o.model))}`:""}${o.cached?" · из кэша":""}`}
 function aiStageBox(s){const o=s.output,idx=AI_STAGES.findIndex(x=>x[0]===o.stage);
   let waited=0;if(o.stage==="waiting"){const k=`${report.runId}:${s.nodeId}:${o.attempt||1}`;aiWaitStart[k]??=Date.now();waited=Math.round((Date.now()-aiWaitStart[k])/1000)}
   const detail={preparing:o.sent==null?"":`в запрос идут ${o.sent} из ${plural(o.total,"находки","находок","находок")}, ${plural(o.groups,"группа","группы","групп")}`,
@@ -673,7 +673,8 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
   const failed=aiRes.map(s=>s.output).find(o=>o?.aiAvailable===false);
   const done=aiRes.map(s=>s.output).filter(o=>o?.aiAvailable);
   const current=modelLabel(activeModel());
-  $("#llmTag").textContent=active?"AI работает…":a?"AI-анализ готов":failed?"LLM недоступна":current;
+  const template=a?.source==="template";
+  $("#llmTag").textContent=active?"AI работает…":template?"Без нейросети":a?"AI-анализ готов":failed?"LLM недоступна":current;
   $("#llmTag").title=current?`Модель для следующего запроса: ${current}. Сменить можно в настройках.`:"";
   renderChat();
   const sameRun=b.dataset.runId===report?.runId;
@@ -685,7 +686,9 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
     b.innerHTML=stage+`<div class="rec"><b>Итог</b>${esc(a.summary)}</div>`+a.recommendations.map(r=>{const f=(report.findings||[]).find(x=>x.id===r.findingId);return f?`<div class="rec ${pick===f.id?"pick":""}"><b>${esc(f.file)}${f.line?":"+f.line:""}</b>${esc(r.explanation)}<br><br><i>Что сделать:</i> ${esc(r.remediation)}</div>`:""}).join("");return}
   const byId=Object.fromEntries(a.groups.map(g=>[g.id,g]));
   const prio=(a.priorities||[]).filter(p=>byId[p.groupId]);
-  b.innerHTML=stage+`<div class="rec ai-top"><b>Итог</b>${esc(a.summary)}
+  const why=template&&failed?(LLM_ERRORS[failed.errorCode]||"Модель недоступна."):"";
+  const note=template?`<div class="warn" style="margin-bottom:8px">${esc(why)} Карточки собраны по типам находок без нейросети: проверьте подробности в отчёте.</div>`:"";
+  b.innerHTML=stage+note+`<div class="rec ai-top"><b>Итог</b>${esc(a.summary)}
     ${prio.length?`<ol>${prio.map(p=>`<li><span class="sev ${esc(byId[p.groupId].severity)}" aria-hidden="true"></span>${esc(p.action)} <small>· ${esc(byId[p.groupId].title)}</small></li>`).join("")}</ol>`:""}
     ${done.length?`<p style="margin:6px 0 0"><small>${done.map(aiDoneText).join("; ")}</small></p>`:""}</div>`
     +a.groups.map(g=>aiCard(g,open)).join("");

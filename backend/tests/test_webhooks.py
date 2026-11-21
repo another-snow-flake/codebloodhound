@@ -79,7 +79,8 @@ class WorkflowWebhookTest(unittest.TestCase):
         _, payload = send.call_args.args
         self.assertEqual(report.status, "succeeded")
         self.assertEqual(len(payload["findings"]), 1)
-        self.assertEqual(payload["aiAnalyses"], [])
+        # without a model the AI node still sends cards built from scanner rules, marked as such
+        self.assertEqual([analysis["source"] for analysis in payload["aiAnalyses"]], ["template"])
 
     def test_non_http_targets_are_rejected(self):
         with patch.dict("os.environ", {"CYBER_GARDEN_WEBHOOKS": '{"team":"file:///report"}'}):

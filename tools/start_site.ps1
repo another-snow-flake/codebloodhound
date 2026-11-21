@@ -1,22 +1,29 @@
 # Host the whole CodeBloodhound site on this PC for a demo: PostgreSQL, FastAPI, the editor
-# behind a password (tools/serve_site.py) and a public SSH tunnel through localhost.run.
+# behind a password (tools/serve_site.py) and a public address: either a VPS relay with your
+# domain (tools/vps/setup_relay.sh) or, without one, a free localhost.run tunnel.
 #
 #   powershell -ExecutionPolicy Bypass -File tools\start_site.ps1          # start or restart
 #   powershell -ExecutionPolicy Bypass -File tools\start_site.ps1 -Stop    # stop everything it started
+#   ... start_site.ps1 -Relay tunnel@203.0.113.5 -Domain example.org    # remember the VPS relay and use it
+#   ... start_site.ps1 -Relay none                                       # forget it, back to localhost.run
 #
 # Expects portable PostgreSQL binaries in -PgBin and a database initialised in
 # %LOCALAPPDATA%\codebloodhound-site\pgdata (user cyber_garden, password in db-password.txt).
 # Files in %LOCALAPPDATA%\codebloodhound-site:
 #   site-password.txt  password for user "team" (owner-only), db-password.txt  database password
 #   site-url.txt       the current public URL, logs\  postgres, api, site and tunnel logs
+#   relay.txt          "<user@vps> <domain>" when a VPS relay is configured
 #   *.pid              processes this script started; restarts stop only these
-# Passwords are never printed. The free tunnel gets a new URL on every start.
+# Passwords are never printed. The free tunnel gets a new URL on every start; the relay keeps the domain.
+# The relay tunnel uses its own key, ~\.ssh\codebloodhound_relay, accepted only by the restricted VPS user.
 
 param(
     [switch]$Stop,
     [switch]$Url,
     [string]$PgBin = (Join-Path $env:LOCALAPPDATA 'codebloodhound-site\pg17\pgsql\bin'),
-    [string]$Model = 'qwen3:8b'
+    [string]$Model = 'qwen3:8b',
+    [string]$Relay,
+    [string]$Domain
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +32,16 @@ $dir = Join-Path $env:LOCALAPPDATA 'codebloodhound-site'
 $logs = Join-Path $dir 'logs'
 $pgdata = Join-Path $dir 'pgdata'
 New-Item -ItemType Directory -Force $logs | Out-Null
+$relayFile = Join-Path $dir 'relay.txt'
+$relayKey = Join-Path $env:USERPROFILE '.ssh\codebloodhound_relay'
+
+if ($Relay -eq 'none') { Remove-Item $relayFile -ErrorAction SilentlyContinue }
+elseif ($Relay) {
+    if ($Relay -notmatch '^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$') { throw 'Pass -Relay as user@host, e.g. tunnel@203.0.113.5' }
+    if ($Domain -notmatch '^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$') { throw 'Pass -Domain with the site domain, e.g. example.org' }
+    [IO.File]::WriteAllText($relayFile, "$Relay $Domain")
+}
+$relayTarget, $relayDomain = if (Test-Path $relayFile) { (Get-Content $relayFile -Raw).Trim() -split '\s+' } else { $null, $null }
 
 function Protect-NewSecret([string]$path, [int]$bytes) {
     if (Test-Path $path) { return }
@@ -52,7 +69,7 @@ function Get-TunnelUrl {
 }
 
 if ($Url) {
-    $current = Get-TunnelUrl
+    $current = if ($relayDomain) { "https://$relayDomain" } else { Get-TunnelUrl }
     if (-not $current) { throw 'The site tunnel is not running. Start it without -Url.' }
     [IO.File]::WriteAllText((Join-Path $dir 'site-url.txt'), $current)
     Write-Output "Site: $current"
@@ -75,6 +92,7 @@ function Wait-Port([int]$port, [int]$seconds) {
 }
 
 Stop-OwnProcess 'tunnel' { param($p) $p.Name -eq 'ssh.exe' -and $p.CommandLine -like '*80:127.0.0.1:8080*localhost.run*' }
+Stop-OwnProcess 'relay' { param($p) $p.CommandLine -like '*relay_tunnel.ps1*' }
 Stop-OwnProcess 'site' { param($p) $p.CommandLine -like "*serve_site.py*" }
 Stop-OwnProcess 'api' { param($p) $p.CommandLine -like "*uvicorn*backend.main:app*" }
 if ($Stop) {
@@ -120,6 +138,27 @@ $passwordFile = Join-Path $dir 'site-password.txt'
 Protect-NewSecret $passwordFile 18
 Start-Logged 'site' $python @('-I', "`"$(Join-Path $PSScriptRoot 'serve_site.py')`"", '--password-file', "`"$passwordFile`"", '--port', '8080') | Out-Null
 if (-not (Wait-Port 8080 15)) { throw "The site proxy did not start. See $logs\site.err.log" }
+
+if ($relayTarget) {
+    if (-not (Test-Path $relayKey)) { throw "The relay key $relayKey is missing. Create it with ssh-keygen -t ed25519 -f $relayKey" }
+    $relayLog = Join-Path $logs 'relay.log'
+    Start-Logged 'relay' 'powershell' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $PSScriptRoot 'relay_tunnel.ps1')`"",
+        '-Target', $relayTarget, '-Key', "`"$relayKey`"", '-Log', "`"$relayLog`"") | Out-Null
+    $siteUrl = "https://$relayDomain"
+    $reached = $false
+    for ($i = 0; $i -lt 20 -and -not $reached; $i++) {
+        Start-Sleep -Seconds 1
+        try { Invoke-WebRequest $siteUrl -UseBasicParsing -TimeoutSec 5 | Out-Null; $reached = $true }
+        catch { if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401) { $reached = $true } }
+    }
+    [IO.File]::WriteAllText((Join-Path $dir 'site-url.txt'), $siteUrl)
+    if (-not $reached) { Write-Warning "$siteUrl does not answer yet. Check DNS for $relayDomain and $relayLog" }
+    Write-Output "Site:     $siteUrl"
+    Write-Output "User:     team"
+    Write-Output "Password: contents of $passwordFile"
+    Write-Output "Logs:     $logs (visitor addresses: /var/log/caddy/access.log on the VPS)"
+    return
+}
 
 $tunnelLog = Join-Path $logs 'tunnel.log'
 Remove-Item $tunnelLog -ErrorAction SilentlyContinue

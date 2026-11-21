@@ -1,3 +1,4 @@
+import itertools
 import re
 from collections.abc import Iterator
 from uuid import uuid4
@@ -29,6 +30,7 @@ ROUTE = re.compile(
     r'\brequestMatchers\s*\(\s*(?:(?:HttpMethod\.)?([A-Z]+)\s*,\s*)?'
     r'"(/[^"\r\n]*)"\s*\)\s*\.\s*(permitAll|authenticated|hasRole|hasAnyRole|hasAuthority|hasAnyAuthority|denyAll)\s*\('
 )
+MAX_ROUTES = 300
 OWNER_COLUMN = r"\b(?:owner|user|customer|account|tenant)_id\b"
 OWNER_FIELD = re.compile(OWNER_COLUMN, re.I)
 LOOKUP_BY_ID = re.compile(r"\b(?:\w+_)?id\s*=\s*(?:\?|:\w+)", re.I)
@@ -83,7 +85,9 @@ def kotlin_issues(code: str) -> Iterator[tuple[str, int]]:
         origin = WILDCARD_ORIGIN.search(options)
         if origin and CREDENTIALS.search(options):
             yield "credentialed-cors", match.start(1) + origin.start()
-    routes = list(ROUTE.finditer(code))
+    # each public route is compared with the rules after it; real configs have dozens of rules,
+    # and the cap keeps a crafted file with thousands of them from tying up the scanner
+    routes = list(itertools.islice(ROUTE.finditer(code), MAX_ROUTES))
     for index, route in enumerate(routes):
         method, path, access = route.groups()
         if access != "permitAll":

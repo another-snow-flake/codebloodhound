@@ -2,7 +2,7 @@ from collections.abc import Callable
 from graphlib import CycleError, TopologicalSorter
 from typing import NamedTuple
 
-from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities
+from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities, template_analysis
 from .llm import LlmError, ModelSpec, client_for, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_kotlin_issues
@@ -130,17 +130,20 @@ def run_ai(
             progress["model"] = model
         analysis = explain_findings(findings, client, stage)
     except LlmError as error:
-        failed = {"aiAvailable": False, "stage": "failed", "errorCode": error.code, "total": total}
+        # the model is unavailable or its answers failed validation twice: cards from the scanner
+        # rules keep the report readable, and errorCode tells the editor why the model was skipped
+        analysis = template_analysis(findings)
+        merge_analysis(report, analysis)
+        output = {"aiAvailable": False, "fallback": True, "stage": "done", "errorCode": error.code,
+                  "explained": len(analysis.recommendations), "total": total}
         if model:
-            failed["model"] = model
-        return AiNodeResult(
-            failed,
-            f"AI unavailable: {error}",
-            None,
-        )
+            output["model"] = model
+        return AiNodeResult(output, f"AI unavailable: {error}", analysis)
 
     merge_analysis(report, analysis)
     output = {"aiAvailable": True, "stage": "done", "explained": len(analysis.recommendations), "total": total}
+    if progress.get("cached"):
+        output["cached"] = True
     if model:
         output["model"] = model
     groups = len(group_findings(findings))

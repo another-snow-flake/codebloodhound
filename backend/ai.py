@@ -7,8 +7,11 @@ and every card must reference a group that was actually sent to it. Severity, co
 and locations shown next to a card come from the report, not from the model.
 """
 
+import hashlib
 import json
 import re
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Protocol
@@ -28,6 +31,26 @@ MAX_FIELD = 300
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿]")
 SEVERITY_RU = {"critical": "Критическая", "high": "Высокая", "medium": "Средняя", "low": "Низкая"}
+PATH_SEGMENT = re.compile(r"[A-Za-z0-9_.-]{1,48}")
+MAX_PATH_SEGMENTS = 6
+CACHE_SIZE = 64
+UPGRADE = re.compile(r"Upgrade to ([0-9]+(?:\.[0-9]+)*)")  # fixed version from the SCA catalog
+# A file path or dependency name in the scanned project may carry instructions for the model.
+# Paths are reduced to plain segments before the prompt, and an answer that waves the findings
+# away is rejected: the scanners found them, so "nothing to fix" can only come from an injection.
+DISMISSIVE_SUMMARY = re.compile(
+    r"(?:уязвимост|проблем|ошиб|находк)\w*\s+(?:не\s+(?:найден|обнаружен|выявлен)|нет\b)"
+    r"|(?:проект|код|приложение)\w*\s+(?:полностью\s+)?безопас"
+    r"|ложн\w*\s+срабатыван|исправлять\s+нечего|ничего\s+(?:делать|исправлять)\s+не"
+    r"|no\s+(?:vulnerabilit|issues|problems|action)|false\s+positive|(?:project|code)\s+is\s+safe",
+    re.I,
+)
+QUALIFIER = re.compile(r"(?:критическ|высок|серь[её]зн|средн|низк|critical|high|medium|low)\w*\s*$", re.I)
+DISMISSIVE_ACTION = re.compile(
+    r"ничего\s+(?:делать|исправлять|менять)\s+не|исправлять\s+нечего|не\s+требует\w*\s+(?:действ|исправлен)"
+    r"|no\s+action|nothing\s+to\s+(?:do|fix)",
+    re.I,
+)
 
 SYSTEM_PROMPT = """Ты — AI Explainer в инструменте проверки безопасности учебных Kotlin/Spring Boot проектов.
 Анализаторы secrets, sast и sca уже нашли проблемы и сгруппировали их: в одной группе находки с одинаковым исправлением. Объясни группы разработчику на русском языке, коротко и по делу.
@@ -37,7 +60,7 @@ SYSTEM_PROMPT = """Ты — AI Explainer в инструменте провер�
 - groupId — только значение ref из входных данных (например, "G1"). Одна карточка на группу.
 - title — название проблемы, до 6 слов, без имён файлов. Для зависимости укажи её artifact, например «Уязвимый snakeyaml».
 - action — одно конкретное действие одним предложением: что изменить в коде, конфигурации или зависимости.
-- Не называй конкретные «безопасные» версии зависимостей: их нет во входных данных. Пиши «обновить до версии, где закрыты указанные CVE».
+- Версию для обновления зависимости называй, только если она есть в message группы (например, «Upgrade to 2.0»). Иначе не придумывай версию, а пиши «обновить до версии, где закрыты указанные CVE».
 - Ты не видишь исходный код. Не цитируй и не выдумывай код, которого нет во входных данных.
 - explanation — чем это опасно, 1–2 предложения.
 - summary — итог проверки в 1–2 предложениях.
@@ -53,7 +76,7 @@ CHAT_PROMPT = """Ты отвечаешь на вопросы разработч�
 Ссылайся только на файлы, строки и идентификаторы из переданных находок. Не придумывай новые уязвимости.
 Называй находки по файлу и строке (например, UserRepo.kt:21), а не по служебным ссылкам F1, F2: пользователь их не видит.
 Ты видишь только находки, а не исходный код. Не цитируй строки кода из проекта: их у тебя нет. Пример исправления можно дать, но прямо назови его примером.
-Не называй конкретные «безопасные» версии зависимостей: их нет в данных. Советуй версию, в которой закрыты указанные CVE, и проверку по advisory.
+Версию для обновления зависимости называй, только если она есть в message находки (например, «Upgrade to 2.0»). Иначе не придумывай версию: советуй версию, в которой закрыты указанные CVE, и проверку по advisory.
 Если данных для ответа не хватает, прямо скажи об этом. Не запрашивай значения секретов.
 
 Как отвечать:
@@ -63,6 +86,41 @@ CHAT_PROMPT = """Ты отвечаешь на вопросы разработч�
 - Обычно хватает 2–6 предложений, не больше 120 слов. Если ответ длинный, сначала самое важное.
 - Пиши обычным текстом без Markdown: без **, обратных кавычек и заголовков. Нумерованный список «1. 2. 3.» можно.
 - Отвечай на языке вопроса."""
+
+# Used when the model is unavailable or its answers fail validation: the report still gets
+# readable cards. Titles and actions depend only on the scanner rule, never on project text.
+TEMPLATES = {
+    "hardcoded-secret": (
+        "Секрет в коде",
+        "Вынести значение в переменную окружения или хранилище секретов и сменить сам секрет.",
+        "Пароль или ключ виден всем, у кого есть доступ к репозиторию, и им можно войти от имени приложения.",
+    ),
+    "sql-injection": (
+        "SQL-инъекция",
+        "Передавать значения в запрос как параметры (? или :name) вместо склейки строк.",
+        "Через входные данные можно изменить SQL-запрос и прочитать или удалить чужие данные.",
+    ),
+    "tls-verification": (
+        "Отключена проверка TLS",
+        "Убрать собственный HostnameVerifier и оставить стандартную проверку имени хоста.",
+        "Без проверки имени хоста соединение можно перехватить и подменить ответы сервера.",
+    ),
+    "credentialed-cors": (
+        "Опасная настройка CORS",
+        "Перечислить доверенные источники явно вместо «*», раз запросы идут с учётными данными.",
+        "Любой сайт сможет отправлять запросы от имени вошедшего пользователя и читать ответы.",
+    ),
+    "route-authorization": (
+        "Порядок правил доступа",
+        "Поставить строгие правила раньше permitAll или сузить шаблон публичного маршрута.",
+        "Из-за порядка правил закрытый маршрут может открыться без входа в систему.",
+    ),
+    "object-authorization": (
+        "Нет проверки владельца",
+        "Добавить в запрос условие по владельцу записи или проверить владельца перед выдачей данных.",
+        "Пользователь может получить чужую запись, подставив её идентификатор.",
+    ),
+}
 
 Stage = Callable[..., None]
 
@@ -156,8 +214,22 @@ def _clip(value: str) -> str:
     return value if len(value) <= MAX_FIELD else value[:MAX_FIELD] + "…"
 
 
+def safe_path(path: str) -> str:
+    """The path as the model sees it: plain segments only, anything else becomes "…"."""
+    parts: list[str] = []
+    for segment in path.split("/")[-MAX_PATH_SEGMENTS:]:
+        part = segment if PATH_SEGMENT.fullmatch(segment) else "…"
+        if part != "…" or not parts or parts[-1] != "…":
+            parts.append(part)
+    return "/".join(parts)
+
+
 def _location(finding: Finding) -> str:
-    return _clip(finding.file) + (f":{finding.line}" if finding.line else "")
+    return safe_path(finding.file) + (f":{finding.line}" if finding.line else "")
+
+
+def _short_location(finding: Finding) -> str:
+    return safe_path(finding.file).rsplit("/", 1)[-1] + (f":{finding.line}" if finding.line else "")
 
 
 def _describe_group(group: FindingGroup) -> dict:
@@ -194,6 +266,16 @@ def select_priorities(cards: Sequence[AiGroup], actions: dict[str, str]) -> list
     ]
 
 
+def dismisses(summary: str) -> bool:
+    """True if the summary says there is nothing to fix. "Критических проблем нет" is an honest
+    summary of a report with medium findings only, so a severity word right before the phrase
+    makes it a statement about that level, not a dismissal."""
+    for match in DISMISSIVE_SUMMARY.finditer(summary):
+        if not QUALIFIER.search(summary[max(0, match.start() - 30):match.start()]):
+            return True
+    return False
+
+
 def parse_answer(content: str, groups: Sequence[FindingGroup]) -> AiAnalysis:
     """Validate the model's JSON and keep only cards for groups that were sent."""
     try:
@@ -202,6 +284,10 @@ def parse_answer(content: str, groups: Sequence[FindingGroup]) -> AiAnalysis:
         raise LlmError("invalid_response", "The model answer does not match the expected schema.") from None
     if CJK.search(content):  # Qwen sometimes slips into Chinese mid-word; the retry usually fixes it
         raise LlmError("invalid_response", "The model answer contains Chinese text.")
+    if dismisses(answer.summary) or any(
+        DISMISSIVE_ACTION.search(item.action) for item in [*answer.groups, *answer.priorities]
+    ):
+        raise LlmError("invalid_response", "The model answer dismisses findings the scanners reported.")
 
     by_ref = {group.ref: group for group in groups}
     cards: list[AiGroup] = []
@@ -232,7 +318,82 @@ def parse_answer(content: str, groups: Sequence[FindingGroup]) -> AiAnalysis:
     )
 
 
-def explain_findings(findings: Sequence[Finding], client: ChatClient | None, stage: Stage | None = None) -> AiAnalysis:
+def _version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def template_analysis(findings: Sequence[Finding]) -> AiAnalysis:
+    """Cards built from the scanner rules alone, for when the model cannot help."""
+    cards = []
+    for group in group_findings(findings):
+        first = group.findings[0]
+        if first.scanner == "sca" and first.artifact:
+            advisories = ", ".join(group.advisories[:3])
+            title = f"Уязвимый {first.artifact}"
+            fixed = sorted({m[1] for f in group.findings if (m := UPGRADE.search(f.message))}, key=_version_key)
+            target = f"до {fixed[-1]} или новее" if fixed else "до версии, где закрыты указанные уязвимости"
+            action = f"Обновить {first.group}:{first.artifact} с версии {first.version or '?'} {target}."
+            explanation = "В этой версии библиотеки есть известные уязвимости" + (f": {advisories}." if advisories else ".")
+        else:
+            title, action, explanation = TEMPLATES.get(first.ruleId, (first.ruleId, first.message, first.message))
+        cards.append(AiGroup(
+            id=group.ref, title=title, action=action, explanation=explanation, severity=group.severity,
+            rationale=rationale(group), findingIds=[finding.id for finding in group.findings],
+        ))
+    urgent = sum(1 for finding in findings if finding.severity in ("critical", "high"))
+    summary = (f"Найдено {_plural(len(findings), 'проблема', 'проблемы', 'проблем')}, "
+               f"из них критических и высоких: {urgent}. Рекомендации собраны по типам находок без нейросети.")
+    recommendations = [
+        Recommendation(findingId=finding_id, explanation=card.explanation, remediation=card.action)
+        for card in cards for finding_id in card.findingIds
+    ]
+    return AiAnalysis(summary=summary, recommendations=recommendations,
+                      priorities=select_priorities(cards, {}), groups=cards, source="template")
+
+
+class AnswerCache:
+    """Recent valid model answers keyed by model and prompt: a repeated scan of the same
+    project shows its cards at once instead of waiting for the model again."""
+
+    def __init__(self, size: int = CACHE_SIZE):
+        self.size = size
+        self.items: OrderedDict[str, str] = OrderedDict()
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def key(client, messages) -> str | None:
+        provider, model = getattr(client, "provider", None), getattr(client, "model", None)
+        if not isinstance(provider, str) or not isinstance(model, str):
+            return None
+        text = json.dumps([provider, model, messages], ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def get(self, key: str | None) -> str | None:
+        if key is None:
+            return None
+        with self.lock:
+            if key in self.items:
+                self.items.move_to_end(key)
+                return self.items[key]
+        return None
+
+    def put(self, key: str | None, content: str) -> None:
+        if key is None:
+            return
+        with self.lock:
+            self.items[key] = content
+            self.items.move_to_end(key)
+            while len(self.items) > self.size:
+                self.items.popitem(last=False)
+
+
+ANSWER_CACHE = AnswerCache()
+
+
+def explain_findings(
+    findings: Sequence[Finding], client: ChatClient | None, stage: Stage | None = None,
+    cache: AnswerCache | None = ANSWER_CACHE,
+) -> AiAnalysis:
     """Ask the model to explain findings. Raises `LlmError` if no valid answer arrives.
 
     `stage(name, **details)` is called before each real step: preparing, waiting, validating.
@@ -246,6 +407,10 @@ def explain_findings(findings: Sequence[Finding], client: ChatClient | None, sta
     sent = sum(len(group.findings) for group in selected)
     report("preparing", total=len(findings), sent=sent, groups=len(selected))
     messages = build_explainer_messages(selected)
+    cache_key = cache.key(client, messages) if cache else None
+    if (cached := cache.get(cache_key) if cache else None) is not None:
+        report("validating", cached=True)
+        return parse_answer(cached, selected)
     max_tokens = min(6144, 512 + 220 * len(selected))
     last_error = None
     for attempt in (1, 2):  # local models sometimes break the JSON once; one retry is cheap
@@ -253,7 +418,10 @@ def explain_findings(findings: Sequence[Finding], client: ChatClient | None, sta
         try:
             content = client.complete(messages, json_mode=True, max_tokens=max_tokens)
             report("validating")
-            return parse_answer(content, selected)
+            analysis = parse_answer(content, selected)
+            if cache:
+                cache.put(cache_key, content)
+            return analysis
         except LlmError as error:
             if error.code not in ("invalid_response", "incomplete_response"):
                 raise
@@ -267,7 +435,7 @@ def build_messages(selected: Sequence[Finding]) -> tuple[list[ChatMessage], dict
     payload = []
     for ref, finding in zip(refs, selected):
         item = {
-            "ref": ref, "scanner": finding.scanner, "ruleId": _clip(finding.ruleId), "file": _clip(finding.file),
+            "ref": ref, "scanner": finding.scanner, "ruleId": _clip(finding.ruleId), "file": safe_path(finding.file),
             "line": finding.line, "severity": finding.severity, "message": _clip(finding.message),
         }
         for key in ("cve", "advisoryId", "group", "artifact", "version"):
@@ -294,4 +462,23 @@ def answer_report_question(
     reply = client.complete(messages, max_tokens=1024)
     if CJK.search(reply) and not CJK.search(question):  # Qwen sometimes slips into Chinese mid-sentence
         reply = client.complete(messages, max_tokens=1024)
-    return reply
+    return tidy_reply(reply, selected)
+
+
+REF = re.compile(r"\bF(\d{1,2})\b(?:\s*\(([^()\n]{1,120})\))?")
+
+
+def tidy_reply(reply: str, selected: Sequence[Finding]) -> str:
+    """Small models ignore "no Markdown" and cite the internal refs F1, F2. The user sees
+    neither, so refs become file:line and Markdown emphasis and headings are removed."""
+    text = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", reply)
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+    text = re.sub(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+", "", text)
+
+    def location(match: re.Match) -> str:
+        number, note = int(match[1]), match[2]
+        if note:  # "F1 (UserRepo.kt:21)" already names the place
+            return note
+        return _short_location(selected[number - 1]) if 1 <= number <= len(selected) else match[0]
+
+    return REF.sub(location, text).strip()

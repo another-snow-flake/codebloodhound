@@ -104,6 +104,7 @@ class AiAnalysis(BaseModel):
     recommendations: list[Recommendation]
     priorities: list[AiPriority] = Field(default_factory=list)
     groups: list[AiGroup] = Field(default_factory=list)
+    source: Literal["model", "template"] = "model"  # template: built from scanner rules without the model
 
 
 ChatText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
