@@ -138,6 +138,12 @@ $passwordFile = Join-Path $dir 'site-password.txt'
 Protect-NewSecret $passwordFile 18
 Start-Logged 'site' $python @('-I', "`"$(Join-Path $PSScriptRoot 'serve_site.py')`"", '--password-file', "`"$passwordFile`"", '--port', '8080') | Out-Null
 if (-not (Wait-Port 8080 15)) { throw "The site proxy did not start. See $logs\site.err.log" }
+# serve_site.py writes site-invite.txt; <site>/?key=<invite> opens the site without the password
+$inviteFile = Join-Path $dir 'site-invite-link.txt'
+function Save-InviteLink([string]$url) {
+    $key = (Get-Content (Join-Path $dir 'site-invite.txt') -Raw).Trim()
+    [IO.File]::WriteAllText($inviteFile, "$url/?key=$key")
+}
 
 if ($relayTarget) {
     if (-not (Test-Path $relayKey)) { throw "The relay key $relayKey is missing. Create it with ssh-keygen -t ed25519 -f $relayKey" }
@@ -152,10 +158,12 @@ if ($relayTarget) {
         catch { if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401) { $reached = $true } }
     }
     [IO.File]::WriteAllText((Join-Path $dir 'site-url.txt'), $siteUrl)
+    Save-InviteLink $siteUrl
     if (-not $reached) { Write-Warning "$siteUrl does not answer yet. Check DNS for $relayDomain and $relayLog" }
     Write-Output "Site:     $siteUrl"
     Write-Output "User:     team"
     Write-Output "Password: contents of $passwordFile"
+    Write-Output "No-password link: contents of $inviteFile"
     Write-Output "Logs:     $logs (visitor addresses: /var/log/caddy/access.log on the VPS)"
     return
 }
@@ -171,9 +179,11 @@ for ($i = 0; $i -lt 60 -and -not $siteUrl; $i++) {
 }
 if (-not $siteUrl) { throw "The tunnel did not report a URL. See $tunnelLog" }
 [IO.File]::WriteAllText((Join-Path $dir 'site-url.txt'), $siteUrl)
+Save-InviteLink $siteUrl
 
 Write-Output "Site:     $siteUrl"
 Write-Output "User:     team"
 Write-Output "Password: contents of $passwordFile"
+Write-Output "No-password link: contents of $inviteFile"
 Write-Output "Logs:     $logs"
 Write-Output 'The domain rotates from time to time: run this script with -Url to see the current one.'

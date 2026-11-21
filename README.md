@@ -12,6 +12,7 @@
 
 Обновлено 21 ноября 2026.
 
+- Сайт открыт по своему домену https://topsecretapi.online (и `www`) через VPS. Для показа без пароля есть ссылка-приглашение `/?key=…`: она ставит cookie на 30 дней.
 - Работают ручной запуск, три анализатора, условие по критичности, отчёт, AI-рекомендации и чат по отчёту.
 - AI показывает этапы работы и группирует рекомендации. Топ действий считается по критичности, а CVE для разных версий одной библиотеки идут в отдельные карточки.
 - Webhook отправляет находки и AI-рекомендации из активной ветки. Доставка проверена в Edge на локальном HTTP-приёмнике с 15 находками из учебного архива.
@@ -69,6 +70,7 @@ We're building a security workflow editor for training projects that use Kotlin,
 
 Updated November 21, 2026.
 
+- The site is served on its own domain https://topsecretapi.online (and `www`) through a VPS. For demos without the password, an invite link `/?key=…` sets a 30-day cookie.
 - Manual runs, all three scanners, severity branching, reports, AI recommendations, and report chat work.
 - The AI panel shows processing stages and groups recommendations. Priorities are ranked by severity, and CVEs for different versions of the same dependency get separate cards.
 - The webhook sends findings and AI recommendations from the active branch. Delivery was tested in Edge with a local HTTP receiver and 15 findings from the training archive.
@@ -160,6 +162,7 @@ powershell -ExecutionPolicy Bypass -File tools\start_site.ps1 -Stop  # оста�
 Скрипт поднимает PostgreSQL, FastAPI с локальной моделью, `tools/serve_site.py` и SSH-туннель через localhost.run. Он печатает адрес, имя пользователя `team` и путь к файлу с паролем. Сам пароль на экран не выводится: его нужно открыть в `site-password.txt`.
 
 - `serve_site.py` отдаёт `frontend/` и пересылает `/api/*` в FastAPI. Страница и API на одном адресе, поэтому CORS менять не нужно, а редактор сам находит API по пути `/api`.
+- Чтобы показать проект без ввода пароля, откройте ссылку из `site-invite-link.txt` (`<сайт>/?key=…`). Она ставит cookie `cbh_session` (HttpOnly, Secure, SameSite=Lax) на 30 дней и перенаправляет на адрес без ключа. Ключ и cookie выводятся из пароля: если удалить `site-password.txt` и перезапустить сайт, старые ссылки и cookie перестанут работать.
 - Весь сайт закрыт HTTP Basic. В API уходят только `Content-Type` и `Accept`, методы ограничены `GET`, `POST` и `PUT`. Не больше 32 соединений, на чтение запроса 30 секунд, тело до 11 МиБ.
 - Логи лежат в `%LOCALAPPDATA%\codebloodhound-site\logs`: `site.log` (метод, путь и статус каждого запроса), `api.err.log` (uvicorn и ошибки FastAPI), `postgres.log`, `tunnel.log`. Тела запросов и пароли в логи не пишутся. Через туннель адрес посетителя не виден, во всех строках будет `127.0.0.1`.
 - Два анонимных туннеля localhost.run с одного компьютера могут получить один адрес. Поэтому `start_site.ps1` останавливает туннель модели из `start_remote_llm.ps1`: сайту он не нужен, бэкенд ходит в Ollama напрямую.
@@ -180,7 +183,7 @@ powershell -ExecutionPolicy Bypass -File tools\start_site.ps1 -Stop  # оста�
    ```
    `tools/relay_tunnel.ps1` держит туннель и переподключается после обрыва сети или сна с паузой от 5 до 60 секунд. Лог — `logs\relay.log`. Вернуться к localhost.run: `-Relay none`.
 
-Пароль сайта (`serve_site.py`) остаётся. Адреса посетителей пишутся на VPS в `/var/log/caddy/access.log`. Если компьютер выключен, Caddy отвечает понятной страницей «сейчас недоступен».
+Пароль сайта (`serve_site.py`) остаётся. Оба имени, домен и `www`, открывают сайт напрямую, без перенаправления: если у провайдера в кэше устарела запись для одного из них, работает другое. Адреса посетителей пишутся на VPS в `/var/log/caddy/access.log`. Если компьютер выключен, Caddy отвечает понятной страницей «сейчас недоступен».
 
 Without a public IP or router access, the site can sit behind a cheap VPS: point the domain's A records at it, run `tools/vps/setup_relay.sh <domain> "<tunnel public key>"` there as root (Caddy with automatic HTTPS, a `tunnel` user limited to one reverse port, ufw), then run `start_site.ps1 -Relay tunnel@<vps> -Domain <domain>` once on the PC. `tools/relay_tunnel.ps1` keeps the tunnel up and reconnects with backoff. Visitor addresses are logged on the VPS in `/var/log/caddy/access.log`.
 

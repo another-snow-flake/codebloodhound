@@ -11,18 +11,26 @@ Usage:
 
 The password file is created with a random password if it does not exist. The user name
 is "team". Keep the file out of git.
+
+For showing the project without typing the password, open <site>/?key=<invite>: the invite
+key is written to site-invite.txt next to the password file. The visit gets a session cookie
+for 30 days and is redirected to the clean address. The key is derived from the password, so
+a new password revokes old invite links and cookies.
 """
 
 import argparse
 import base64
+import hashlib
 import hmac
 import mimetypes
 import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs
 from urllib.request import ProxyHandler, Request, build_opener
 
 
@@ -32,6 +40,8 @@ MAX_BODY = 11 * 1024 * 1024  # the API accepts ZIP uploads up to 10 MiB plus mul
 MAX_CONNECTIONS = 32
 READ_TIMEOUT = 30
 FORWARD_HEADERS = ("Content-Type", "Accept")
+COOKIE = "cbh_session"
+COOKIE_AGE = 30 * 24 * 3600
 BUSY_RESPONSE = b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
 
@@ -45,8 +55,20 @@ def load_password(path: Path) -> str:
     return password
 
 
+def derived(password: str, purpose: str) -> str:
+    digest = hmac.new(password.encode(), purpose.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def invite_key(password: str) -> str:
+    """The key for <site>/?key=...: lets a visitor in without typing the password."""
+    return derived(password, "invite")[:24]
+
+
 def make_handler(password: str, api: str, root: Path = FRONTEND, timeout: float = 300):
     expected = ("Basic " + base64.b64encode(f"{USER}:{password}".encode()).decode()).encode()
+    invite = invite_key(password).encode()
+    session = derived(password, "session").encode()
     opener = build_opener(ProxyHandler({}))
     root = root.resolve()
 
@@ -77,9 +99,34 @@ def make_handler(password: str, api: str, root: Path = FRONTEND, timeout: float 
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def has_session(self) -> bool:
+            try:
+                morsel = SimpleCookie(self.headers.get("Cookie", "")).get(COOKIE)
+            except CookieError:
+                return False
+            return morsel is not None and hmac.compare_digest(morsel.value.encode(), session)
+
+        def accept_invite(self) -> bool:
+            """GET /...?key=<invite>: set the session cookie and redirect to the address without the key."""
+            if self.command not in ("GET", "HEAD") or "?" not in self.path:
+                return False
+            path, query = self.path.split("?", 1)
+            keys = parse_qs(query).get("key", [])
+            if len(keys) != 1 or not hmac.compare_digest(keys[0].encode(), invite):
+                return False
+            self.send(303, b"", "text/plain; charset=utf-8", {
+                "Location": path if path.startswith("/") and not path.startswith("//") else "/",
+                "Set-Cookie": f"{COOKIE}={session.decode()}; Max-Age={COOKIE_AGE}; Path=/; HttpOnly; Secure; SameSite=Lax",
+            })
+            return True
+
         def authorized(self) -> bool:
             if hmac.compare_digest(self.headers.get("Authorization", "").encode(), expected):
                 return True
+            if self.has_session():
+                return True
+            if self.accept_invite():
+                return False
             self.send(401, b"Authentication required.", "text/plain; charset=utf-8",
                       {"WWW-Authenticate": 'Basic realm="CodeBloodhound", charset="UTF-8"'})
             return False
@@ -194,6 +241,7 @@ def main():
     parser.add_argument("--api", default="http://127.0.0.1:8000")
     args = parser.parse_args()
     password = load_password(args.password_file)
+    args.password_file.with_name("site-invite.txt").write_text(invite_key(password), encoding="utf-8")
     server = LimitedServer(("127.0.0.1", args.port), make_handler(password, args.api.rstrip("/")))
     print(f"Site on http://127.0.0.1:{args.port} (user {USER}, password in {args.password_file}) -> API {args.api}", flush=True)
     server.serve_forever()

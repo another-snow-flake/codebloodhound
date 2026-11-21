@@ -7,7 +7,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 SITE_PATH = Path(__file__).resolve().parents[2] / "tools" / "serve_site.py"
 spec = importlib.util.spec_from_file_location("serve_site", SITE_PATH)
@@ -15,7 +15,14 @@ site = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(site)
 
 PASSWORD = "p" * 20
-OPENER = build_opener(ProxyHandler({}))
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # the tests look at redirects themselves
+
+
+OPENER = build_opener(ProxyHandler({}), NoRedirect())
 
 
 class FakeApi(BaseHTTPRequestHandler):
@@ -79,6 +86,27 @@ class ServeSiteTest(unittest.TestCase):
             self.assertIn("Basic", headers["WWW-Authenticate"])
         self.assertEqual(self.call("GET", "/", password="wrong-password-123")[0], 401)
         self.assertEqual(FakeApi.seen, [])
+
+    def test_invite_link_sets_a_cookie_instead_of_the_password(self):
+        key = site.invite_key(PASSWORD)
+        self.assertEqual(self.call("GET", "/?key=wrong", password=None)[0], 401)
+        self.assertEqual(self.call("POST", f"/api/workflows?key={key}", b"{}", password=None)[0], 401)
+        status, _, headers = self.call("GET", f"/?key={key}", password=None)
+        self.assertEqual((status, headers["Location"]), (303, "/"))
+        cookie = headers["Set-Cookie"]
+        for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Max-Age="):
+            self.assertIn(flag, cookie)
+        session = cookie.split(";")[0]
+        self.assertNotIn(key, session)
+        self.assertEqual(self.call("GET", "/", password=None, headers={"Cookie": session})[0], 200)
+        self.assertEqual(self.call("POST", "/api/workflows", b"{}", password=None, headers={"Cookie": session})[0], 201)
+        self.assertEqual(self.call("GET", "/", password=None, headers={"Cookie": session + "x"})[0], 401)
+        self.assertEqual(self.call("GET", "/", password=None, headers={"Cookie": "cbh_session=\"bad"})[0], 401)
+        # a protocol-relative path must not turn the redirect into an open redirect
+        location = self.call("GET", f"//evil.example?key={key}", password=None)[2]["Location"]
+        self.assertTrue(location.startswith("/") and not location.startswith("//"), location)
+        # the key depends on the password: a new password revokes old links
+        self.assertNotEqual(site.invite_key("q" * 20), key)
 
     def test_serves_the_editor_but_nothing_outside_frontend(self):
         status, body, headers = self.call("GET", "/")
