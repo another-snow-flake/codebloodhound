@@ -71,6 +71,17 @@ svg.edges text{font-size:11px;fill:var(--mute)}
 .s-running .sdot{background:var(--run);animation:pl 1s infinite}
 .s-succeeded .sdot{background:var(--ok)}.s-failed .sdot{background:var(--bad)}.s-queued .sdot{background:var(--mute)}
 .node.s-failed{border-color:var(--bad)}.node.s-skipped{opacity:.55}
+.node.alert-bad{border-color:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 30%,transparent)}
+.node.alert-warn{border-color:var(--med);box-shadow:0 0 0 3px color-mix(in srgb,var(--med) 30%,transparent)}
+.node.alert-bad.sel,.node.alert-warn.sel{box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 35%,transparent)}
+.node .badge{position:absolute;top:-9px;right:-9px;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--bad);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.node.alert-warn .badge{background:var(--med);color:#1d2b24}
+.node-issues{grid-column:1/-1;border:1.5px solid var(--line);border-left-width:4px;border-radius:10px;padding:10px 12px;background:var(--card)}
+.node-issues.bad{border-color:var(--bad)}.node-issues.warn{border-color:var(--med)}.node-issues.ok{border-color:var(--ok)}
+.rb .node-issues h4{margin:0 0 6px;color:var(--ink);font-weight:600}
+.node-issues .ni{padding:8px 0;border-top:1px dashed var(--line)}
+.node-issues .ni p{margin:4px 0}
+.node-issues ul{list-style:none;margin:4px 0 0;padding:0}
 @keyframes pl{50%{opacity:.3}}
 @media (prefers-reduced-motion:reduce){.s-running .sdot{animation:none}main{transition:none}}
 .h{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--card);border:2px solid var(--mute);cursor:crosshair}
@@ -303,16 +314,47 @@ function init(){const a=mk("trigger",40,120,{mode:"manual"});wf.nodes=[a];const 
 function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";clearTimeout(toast.h);toast.h=setTimeout(()=>t.style.display="none",5000)}
 const fail=e=>toast(e.message||"Что-то пошло не так");
 const stLabel=s=>({queued:"в очереди",running:"выполняется",succeeded:"готово",failed:"ошибка",skipped:"пропущена"}[s]);
+// Ноды с находками или ошибками обводятся: красным при critical/high и ошибках, жёлтым при medium/low
+// и при ответе без нейросети. По клику под холстом видно, что не так и что советует AI.
+const SEV_RANK={critical:0,high:1,medium:2,low:3};
+const worstSeverity=fs=>fs.reduce((a,f)=>SEV_RANK[f.severity]<SEV_RANK[a]?f.severity:a,"low");
+function nodeError(n,s){const o=s.output||{};
+  if(n.type==="notify"&&o.errorCode)return WEBHOOK_ERRORS[o.errorCode]||(o.statusCode?`Получатель вернул HTTP ${o.statusCode}.`:s.error);
+  return s.error==="Node execution failed."?"Нода завершилась с ошибкой.":s.error||"Нода завершилась с ошибкой."}
+function nodeIssues(n){const s=report?.nodes.find(x=>x.nodeId===n.id);if(!s||s.status==="running"||s.status==="queued")return null;
+  const o=s.output||{},res={level:null,error:"",items:[],count:0};
+  if(s.status==="failed"){res.level="bad";res.error=nodeError(n,s)}
+  else if(n.type==="ai"&&o.aiAvailable===false){res.level="warn";res.error=(LLM_ERRORS[o.errorCode]||"Модель недоступна.")+(o.fallback?" Карточки собраны без нейросети.":"")}
+  if(SCANNERS.has(n.type)){const ids=new Set((o.findings||[]).map(f=>f.id)),fs=(report.findings||[]).filter(f=>ids.has(f.id));
+    res.count=fs.length;
+    if(fs.length){res.level=res.level||(SEV_RANK[worstSeverity(fs)]<=1?"bad":"warn");
+      const groups=report.aiAnalysis?.groups||[],buckets=new Map();
+      for(const f of fs){const g=groups.find(x=>x.findingIds.includes(f.id)),key=g?"g:"+g.id:"r:"+f.ruleId;
+        if(!buckets.has(key))buckets.set(key,{g,rule:f.ruleId,message:f.message,findings:[]});buckets.get(key).findings.push(f)}
+      res.items=[...buckets.values()].map(b=>({...b,severity:worstSeverity(b.findings)})).sort((a,b)=>SEV_RANK[a.severity]-SEV_RANK[b.severity])}}
+  return res.level?res:null}
+function nodeIssuesBlock(){if(!report||sel?.t!=="n")return"";const n=wf.nodes.find(x=>x.id===sel.id);if(!n)return"";
+  const s=report.nodes.find(x=>x.nodeId===n.id);if(!s||n.type==="trigger"||n.type==="condition")return"";
+  const iss=nodeIssues(n);
+  if(!iss)return s.status==="succeeded"?`<div class="node-issues ok"><h4>${T[n.type].n}: проблем не найдено</h4></div>`:"";
+  const label=r=>Object.hasOwn(RULES,r)?RULES[r]:r;
+  return`<div class="node-issues ${iss.level}"><h4>Что не так: ${T[n.type].n}${iss.count?` · ${plural(iss.count,"находка","находки","находок")}`:""}</h4>
+    ${iss.error?`<p style="margin:0 0 6px">${esc(iss.error)}</p>`:""}
+    ${iss.items.map(it=>`<div class="ni"><b><span class="sev ${esc(it.severity)}" aria-hidden="true"></span>${esc(it.g?.title||label(it.rule))}</b> <small>· ${SEVRU[it.severity]||esc(it.severity)} · ${plural(it.findings.length,"место","места","мест")}</small>
+      <p>${esc(it.g?.explanation||it.message)}</p>${it.g?`<p><i>Что сделать:</i> ${esc(it.g.action)}</p>`:""}
+      <ul>${it.findings.map(findingItem).join("")}</ul></div>`).join("")}</div>`}
 function render(){
   const bd=$("#board");bd.querySelectorAll(".node").forEach(e=>e.remove());
   for(const n of wf.nodes){const t=T[n.type],e=document.createElement("div");e.className="node";e.dataset.id=n.id;
     const s=report?.nodes.find(x=>x.nodeId===n.id)?.status;if(s)e.classList.add("s-"+s);
+    const iss=nodeIssues(n);if(iss){e.classList.add("alert-"+iss.level);e.title="Нажмите, чтобы увидеть, что не так"}
     e.innerHTML=`<span class="bar" style="background:${t.c}"></span><b>${t.n}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается"}</div>`+
+    (iss?`<span class="badge" aria-label="Проблем: ${iss.count||1}">${iss.count||"!"}</span>`:"")+
     (n.type!=="trigger"?`<span class="h in" data-in="${esc(n.id)}" title="Вход"></span>`:"")+
     (n.type==="condition"?`<span class="h t" data-out="${esc(n.id)}" data-hd="true" title="Выход «да»"></span><span class="h f" data-out="${esc(n.id)}" data-hd="false" title="Выход «нет»"></span>`:`<span class="h out" data-out="${esc(n.id)}" title="Выход"></span>`);
     if(sel?.t==="n"&&sel.id===n.id)e.classList.add("sel");
     e.style.left=n.position.x+"px";e.style.top=n.position.y+"px";bd.appendChild(e)}
-  edges();inspector()}
+  edges();inspector();if(report&&$("#repBody").dataset.issuesFor!==(sel?.t==="n"?sel.id:""))renderRep()}
 function pt(n,out,h){const p=n.position;return out?[p.x+190,p.y+(n.type==="condition"?(h==="true"?24:50):36)]:[p.x,p.y+36]}
 function edges(tmp){const sv=$("#edges");let h="";
   for(const e of wf.edges){const a=wf.nodes.find(n=>n.id===e.source),b=wf.nodes.find(n=>n.id===e.target);if(!a||!b)continue;
@@ -339,7 +381,8 @@ bd.addEventListener("pointerdown",ev=>{
     const ox=ev.clientX-n.position.x,oy=ev.clientY-n.position.y;
     const mv=e=>{n.position.x=Math.max(0,Math.round(e.clientX-ox));n.position.y=Math.max(0,Math.round(e.clientY-oy));nd.style.left=n.position.x+"px";nd.style.top=n.position.y+"px";edges()};
     const up=()=>{removeEventListener("pointermove",mv);removeEventListener("pointerup",up);render()};
-    addEventListener("pointermove",mv);addEventListener("pointerup",up);document.querySelectorAll(".node.sel").forEach(x=>x.classList.remove("sel"));nd.classList.add("sel");inspector();return}
+    addEventListener("pointermove",mv);addEventListener("pointerup",up);document.querySelectorAll(".node.sel").forEach(x=>x.classList.remove("sel"));nd.classList.add("sel");inspector();
+    if(report&&nodeIssues(n))openRep();return}
   const ep=ev.target.closest("[data-e]");if(ep){sel={t:"e",id:ep.dataset.e};render();return}
   sel=null;render()});
 addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
@@ -576,7 +619,8 @@ function renderRep(){const b=$("#repBody");if(!report){delete b.dataset.runId;$(
   const openGroups=new Set(sameRun?Array.from(b.querySelectorAll("details[open]"),e=>e.dataset.group):[]);
   const scrollTop=sameRun?b.scrollTop:0;
   b.dataset.runId=report.runId;
-  b.innerHTML=`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{const n=wf.nodes.find(x=>x.id===s.nodeId);return n?`<div><span>${T[n.type].n}${nodeNote(n,s)}</span><small>${stLabel(s.status)}</small></div>`:""}).join("")}</div></div>
+  b.dataset.issuesFor=sel?.t==="n"?sel.id:"";
+  b.innerHTML=nodeIssuesBlock()+`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{const n=wf.nodes.find(x=>x.id===s.nodeId);return n?`<div><span>${T[n.type].n}${nodeNote(n,s)}</span><small>${stLabel(s.status)}</small></div>`:""}).join("")}</div></div>
   <div><h4>Находки (${fs.length})</h4>${renderFindings(fs,openGroups)}</div>`;
   b.scrollTop=scrollTop;
   b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{
