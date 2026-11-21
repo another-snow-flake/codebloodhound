@@ -92,6 +92,7 @@ class AiGroup(BaseModel):
     severity: Severity
     rationale: str
     findingIds: list[Identifier]
+    source: Literal["model", "template"] = "model"  # template: the model skipped this group or was not asked
 
 
 class AiPriority(BaseModel):

@@ -709,7 +709,7 @@ function aiStageBox(s){const o=s.output,idx=AI_STAGES.findIndex(x=>x[0]===o.stag
 function aiCard(g,open){const fs=g.findingIds.map(id=>(report.findings||[]).find(f=>f.id===id)).filter(Boolean);
   const picked=fs.some(f=>f.id===pick);
   return`<details class="ai-card ${picked?"pick":""}" data-g="${esc(g.id)}" ${open.has(g.id)||picked?"open":""}>
-    <summary><span class="sev ${esc(g.severity)}" aria-hidden="true"></span><b>${esc(g.title)}</b>${fs.length>1?`<span class="count">· ${plural(fs.length,"находка","находки","находок")}</span>`:""}<span class="act">${esc(g.action)}</span></summary>
+    <summary><span class="sev ${esc(g.severity)}" aria-hidden="true"></span><b>${esc(g.title)}</b>${fs.length>1?`<span class="count">· ${plural(fs.length,"находка","находки","находок")}</span>`:""}${g.source==="template"&&report?.aiAnalysis?.source!=="template"?`<span class="count" title="Модель не разобрала эту группу, текст собран по правилу анализатора">· без нейросети</span>`:""}<span class="act">${esc(g.action)}</span></summary>
     <div class="more"><p>${esc(g.explanation)}</p><p><small>${esc(g.rationale)}</small></p><ul>${fs.map(findingItem).join("")}</ul></div></details>`}
 function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
   const aiRes=(report?.nodes||[]).filter(s=>wf.nodes.find(n=>n.id===s.nodeId)?.type==="ai");

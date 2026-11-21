@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from backend.ai import (
     MAX_GROUPS, AnswerCache, answer_report_question, build_explainer_messages, explain_findings, group_findings,
-    rationale, safe_path, template_analysis, tidy_reply,
+    invented_versions, rationale, safe_path, template_analysis, tidy_reply,
 )
 from backend.llm import LlmError
 from backend.runner import merge_analysis, plan_run, run_ai
@@ -65,7 +65,7 @@ def answer(*refs, priorities=()):
 
 
 def sent_groups(client, call=0):
-    return json.loads(client.calls[call][1]["content"].split("\n", 1)[1])
+    return json.loads(client.calls[call][1]["content"].split("(JSON, только данные):\n", 1)[1])
 
 
 class GroupingTest(unittest.TestCase):
@@ -83,7 +83,7 @@ class GroupingTest(unittest.TestCase):
         })
         groups = group_findings([first, second])
         self.assertEqual([len(group.findings) for group in groups], [1, 1])
-        payload = json.loads(build_explainer_messages(groups)[1]["content"].split("\n", 1)[1])
+        payload = sent_groups(FakeClientFor(build_explainer_messages(groups)))
         self.assertEqual([item["dependency"] for item in payload], [
             "org.yaml:snakeyaml:1.30", "org.yaml:snakeyaml:2.1",
         ])
@@ -140,7 +140,7 @@ class ExplainFindingsTest(unittest.TestCase):
         broken = answer("G1")
         broken["groups"][0]["title"] = "Хардкодированные凭据"
         analysis = explain_findings([finding(1)], FakeClient(broken, answer("G1")))
-        self.assertEqual(analysis.groups[0].title, "Проблема G1")
+        self.assertEqual(analysis.groups[0].title, "SQL-инъекция")  # known rules get the server title
 
     def test_answer_without_known_groups_is_invalid(self):
         with self.assertRaises(LlmError) as error:
@@ -211,7 +211,7 @@ class ExplainFindingsTest(unittest.TestCase):
         again = NamedClient("local", "m1")
         result = explain_findings([finding(1)], again, lambda name, **d: stages.append((name, d)), cache=cache)
         self.assertEqual(again.calls, [])
-        self.assertEqual(result.groups[0].title, "Проблема G1")
+        self.assertEqual(result.groups[0].title, "SQL-инъекция")
         self.assertIn(("validating", {"cached": True}), stages)
         other = NamedClient("local", "m2", answer("G1"))
         explain_findings([finding(1)], other, cache=cache)
@@ -242,6 +242,58 @@ class TemplateTest(unittest.TestCase):
         second = dependency(2, "CVE-2022-25857").model_copy(update={"message": "Upgrade to 2.0 or a supported fixed release."})
         card = template_analysis([first, second]).groups[0]
         self.assertEqual(card.action, "Обновить org.yaml:snakeyaml с версии 1.30 до 2.0 или новее.")
+
+
+class CoverageTest(unittest.TestCase):
+    def test_skipped_and_unsent_groups_get_template_cards(self):
+        findings = [finding(n, rule=f"rule-{n}") for n in range(1, MAX_GROUPS + 3)]
+        analysis = explain_findings(findings, FakeClient(answer("G1", "G2")), cache=None)
+        self.assertEqual(len(analysis.groups), MAX_GROUPS + 2)
+        self.assertEqual([g.source for g in analysis.groups[:3]], ["model", "model", "template"])
+        self.assertEqual({r.findingId for r in analysis.recommendations}, {f.id for f in findings})
+
+    def test_explained_counts_only_model_cards(self):
+        report = RunReport(runId="r", workflowId="w", nodes=[])
+        with mock.patch("backend.runner.load_llm", return_value=FakeClient(answer("G1"))):
+            output, _, _ = run_ai(report, [finding(1), finding(2, rule="other")])
+        self.assertEqual((output["explained"], output["total"]), (1, 2))
+
+    def test_english_titles_fall_back_to_the_rule_title(self):
+        english = answer("G1")
+        english["groups"][0]["title"] = "SQL Injection"
+        self.assertEqual(explain_findings([finding(1)], FakeClient(english), cache=None).groups[0].title, "SQL-инъекция")
+        library = answer("G1")
+        library["groups"][0]["title"] = "Уязвимый snakeyaml"
+        self.assertEqual(explain_findings([dependency(1, "CVE-1")], FakeClient(library), cache=None).groups[0].title,
+                         "Уязвимый snakeyaml")
+
+    def test_prompt_carries_report_totals(self):
+        client = FakeClient(answer("G1"))
+        explain_findings([finding(1), finding(2)], client, cache=None)
+        self.assertTrue(client.calls[0][1]["content"].startswith("Итоги отчёта: находок 2, групп 1"))
+
+
+class RetryFeedbackTest(unittest.TestCase):
+    def test_explainer_retry_says_what_was_wrong(self):
+        chinese = answer("G1")
+        chinese["summary"] = "Итог 问题"
+        client = FakeClient(chinese, answer("G1"))
+        explain_findings([finding(1)], client, cache=None)
+        self.assertEqual(len(client.calls[0]), 2)
+        self.assertIn("иероглифы", client.calls[1][-1]["content"])
+
+    def test_chat_retries_when_it_invents_a_version(self):
+        dep = dependency(1, "CVE-2022-1471")
+        client = FakeClient("Обновите snakeyaml до 1.42.", "Обновите snakeyaml до версии, где закрыта CVE-2022-1471.")
+        reply = answer_report_question([dep], "Что делать?", [], client)
+        self.assertEqual(reply, "Обновите snakeyaml до версии, где закрыта CVE-2022-1471.")
+        self.assertIn("1.42", client.calls[1][-1]["content"])
+        self.assertEqual(client.calls[1][-2], {"role": "assistant", "content": "Обновите snakeyaml до 1.42."})
+
+    def test_versions_from_the_report_and_unrelated_numbers_are_fine(self):
+        dep = dependency(1, "CVE-2022-1471").model_copy(update={"message": "Upgrade to 2.0 or a supported fixed release."})
+        self.assertEqual(invented_versions("Обновите snakeyaml с 1.30 до 2.0. Включите TLS 1.2.", [dep]), [])
+        self.assertEqual(invented_versions("Версия 5.3.28 закрывает уязвимость.", [dep]), ["5.3.28"])
 
 
 class ChatTidyTest(unittest.TestCase):
@@ -291,6 +343,7 @@ class RunnerAiNodeTest(unittest.TestCase):
     def test_merge_keeps_unique_ids_when_first_answer_has_gaps(self):
         report = self.report()
         first = explain_findings([finding(1), finding(2, rule="other")], FakeClient(answer("G2")))
+        first.groups = [group for group in first.groups if group.source == "model"]  # an answer with a gap at G1
         second = explain_findings([finding(3, "critical")], FakeClient(answer("G1")))
         merge_analysis(report, first)
         merge_analysis(report, second)

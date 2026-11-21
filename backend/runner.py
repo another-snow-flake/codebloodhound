@@ -141,7 +141,8 @@ def run_ai(
         return AiNodeResult(output, f"AI unavailable: {error}", analysis)
 
     merge_analysis(report, analysis)
-    output = {"aiAvailable": True, "stage": "done", "explained": len(analysis.recommendations), "total": total}
+    explained = sum(len(group.findingIds) for group in analysis.groups if group.source == "model")
+    output = {"aiAvailable": True, "stage": "done", "explained": explained, "total": total}
     if progress.get("cached"):
         output["cached"] = True
     if model:
