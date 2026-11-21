@@ -74,6 +74,12 @@ svg.edges .edge-x path{stroke:var(--bad);stroke-width:2;stroke-linecap:round}
 svg.edges .edge-x:hover circle{fill:var(--bad)}
 svg.edges .edge-x:hover path{stroke:#fff}
 svg.edges text{font-size:11px;fill:var(--mute)}
+/* plugin editor: a banner over the canvas while a plugin's own graph is open */
+.plugin-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:6;display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:calc(100% - 32px);background:var(--card);border:2px solid var(--acc);border-radius:16px;padding:8px 12px;box-shadow:0 8px 24px rgba(0,0,0,.14)}
+.plugin-bar[hidden]{display:none}
+.plugin-bar small{color:var(--mute)}
+body.plugin-editing #runBtn{opacity:.5}
+.node.port-node{border-style:dashed}
 .node{position:absolute;left:calc(var(--node-x) + var(--pan-x,0px));top:calc(var(--node-y) + var(--pan-y,0px));width:190px;height:72px;background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;cursor:grab;user-select:none;touch-action:none}
 #edgeLayer{transform:translate(var(--pan-x,0px),var(--pan-y,0px))}
 .node.sel{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 25%,transparent)}

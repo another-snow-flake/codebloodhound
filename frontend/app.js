@@ -1,20 +1,27 @@
 const T={trigger:{n:"Запуск",d:"Вручную или по расписанию",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Критичность, количество или регулярное выражение",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
 const SCANNERS=new Set(["secrets","sca","sast"]);
 T.source={n:"Источник",d:"Файл или папка внутри ZIP",c:"#16767c"};
-const SUPPORTED=new Set(["trigger","source","condition","ai","notify","custom",...SCANNERS]);
+// плагин — отдельный граф; внутри него ноды «Вход k» и «Выход k» по числу портов ноды плагина
+const PLUGIN_TYPES={plugin:{n:"Плагин",c:"#2d6cdf"},plugin_input:{n:"Вход",c:"#16767c"},plugin_output:{n:"Выход",c:"#16767c"}};
+const PLUGIN_INNER=new Set(["plugin_input","plugin_output","source","condition","ai","custom",...SCANNERS]);
+const SUPPORTED=new Set(["trigger","source","condition","ai","notify","custom","plugin",...SCANNERS]);
 // Свои ноды: название, цвет и число портов хранятся в config. Порты с номерами («in2», «out3»)
 // нужны только когда их больше одного, так же их проверяет бэкенд.
 const NODE_COLORS=["#2f6b4f","#b3261e","#d9622b","#c79a14","#2d6cdf","#7a5ac8","#5a8bb5","#68766d"];
 const isColor=c=>typeof c==="string"&&/^#[0-9a-fA-F]{6}$/.test(c);
-const nodeName=n=>n.type==="custom"?(n.config?.title||"Своя нода"):(T[n.type]?.n||n.type);
-const nodeColor=n=>n.type==="custom"?(isColor(n.config?.color)?n.config.color:"#68766d"):(T[n.type]?.c||"#68766d");
+const nodeName=n=>n.type==="custom"||n.type==="plugin"?(n.config?.title||(n.type==="plugin"?"Плагин":"Своя нода")):
+  n.type==="plugin_input"||n.type==="plugin_output"?`${PLUGIN_TYPES[n.type].n} ${n.config?.index||1}`:(T[n.type]?.n||n.type);
+const nodeColor=n=>n.type==="custom"||n.type==="plugin"?(isColor(n.config?.color)?n.config.color:"#68766d"):(T[n.type]?.c||PLUGIN_TYPES[n.type]?.c||"#68766d");
 const nodeScanner=n=>n.type==="custom"?n.config?.scanner:SCANNERS.has(n.type)?n.type:null;
 function ports(n){if(n.type==="custom")return{ins:(+n.config.inputs||1)+(nodeScanner(n)?1:0),outs:Math.max(0,+n.config.outputs||0)};
+  if(n.type==="plugin")return{ins:+n.config.inputs||1,outs:+n.config.outputs||1};
+  if(n.type==="plugin_input")return{ins:0,outs:1};
+  if(n.type==="plugin_output")return{ins:1,outs:0};
   return{ins:["trigger","source"].includes(n.type)?0:SCANNERS.has(n.type)?2:1,outs:n.type==="condition"?2:1}}
-function outHandle(n,k){if(n.type==="condition")return k===1?"true":"false";return n.type==="custom"&&ports(n).outs>1?"out"+k:null}
+function outHandle(n,k){if(n.type==="condition")return k===1?"true":"false";return(n.type==="custom"||n.type==="plugin")&&ports(n).outs>1?"out"+k:null}
 function inHandle(n,k){
   if(nodeScanner(n)&&k===ports(n).ins)return "source";
-  return n.type==="custom"&&n.config.inputs>1?"in"+k:null
+  return(n.type==="custom"||n.type==="plugin")&&n.config.inputs>1?"in"+k:null
 }
 function handleIndex(n,h){if(!h)return 1;if(h==="true")return 1;if(h==="false")return 2;if(h==="source")return ports(n).ins;return +h.replace(/\D/g,"")||1}
 // заметка в ноде: до трёх строк примерно по 26 символов, остальное обрезается многоточием
@@ -94,6 +101,7 @@ const JH={"Content-Type":"application/json"};
 let wf={id:"",name:"Поиск секретов",nodes:[],edges:[]};
 let sel=null,sourceId=null,sourceName="",report=null,pick=null,running=false,uid=1;
 let historicalReport=false;
+let pluginEdit=null,pendingPlugin=null;  // открытый редактор плагина и плагин, ждущий окна настроек
 const pan={x:0,y:0};
 const nid=()=>{let i;do{i="n"+uid++}while(wf.nodes.some(n=>n.id===i));return i};
 const eid=()=>"e"+Math.random().toString(36).slice(2,9);
@@ -115,7 +123,10 @@ function nodeIssues(n){const s=historicalReport?null:report?.nodes.find(x=>x.nod
   const o=s.output||{},res={level:null,error:"",items:[],count:0};
   if(s.status==="failed"){res.level="bad";res.error=nodeError(n,s)}
   else if(n.type==="ai"&&o.aiAvailable===false){res.level="warn";res.error=(LLM_ERRORS[o.errorCode]||"Модель недоступна.")+(o.fallback?" Карточки собраны без нейросети.":"")}
-  if(nodeScanner(n)){const ids=new Set((o.findings||[]).map(f=>f.id)),fs=(report.findings||[]).filter(f=>ids.has(f.id));
+  const inner=n.type==="plugin"?report.nodes.filter(x=>x.nodeId.startsWith(n.id+"/")):[];
+  const innerFailed=inner.find(x=>x.status==="failed");
+  if(innerFailed&&!res.error){res.level="bad";res.error=nodeError({type:innerFailed.type},innerFailed)}
+  if(nodeScanner(n)||n.type==="plugin"){const ids=new Set((n.type==="plugin"?inner.flatMap(x=>x.output?.findings||[]):o.findings||[]).map(f=>f.id)),fs=(report.findings||[]).filter(f=>ids.has(f.id));
     res.count=fs.length;
     if(fs.length){res.level=res.level||(SEV_RANK[worstSeverity(fs)]<=1?"bad":"warn");
       const groups=report.aiAnalysis?.groups||[],buckets=new Map();
@@ -135,11 +146,12 @@ function nodeIssuesBlock(){if(historicalReport||!report||sel?.t!=="n")return"";c
       <ul>${it.findings.map(findingItem).join("")}</ul></div>`).join("")}</div>`}
 function render(refreshInspector=true){
   const bd=$("#board");bd.querySelectorAll(".node").forEach(e=>e.remove());
-  for(const n of wf.nodes){const e=document.createElement("div");e.className="node";e.dataset.id=n.id;
+  for(const n of wf.nodes){const e=document.createElement("div");e.className="node"+(n.type==="plugin_input"||n.type==="plugin_output"?" port-node":"");e.dataset.id=n.id;
     const s=historicalReport?null:report?.nodes.find(x=>x.nodeId===n.id)?.status;if(s)e.classList.add("s-"+s);
     const iss=nodeIssues(n);if(iss){e.classList.add("alert-"+iss.level);e.title="Нажмите, чтобы увидеть, что не так"}
     const p=ports(n),note=n.config?.note;
-    e.innerHTML=`<span class="bar" style="background:${nodeColor(n)}"></span><b>${esc(nodeName(n))}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается"}</div>`+
+    const idle=pluginEdit?(n.type==="plugin_input"?"сюда приходят находки":n.type==="plugin_output"?"отсюда находки уходят":"шаг плагина"):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается";
+    e.innerHTML=`<span class="bar" style="background:${nodeColor(n)}"></span><b>${esc(nodeName(n))}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):idle}</div>`+
     (note?`<div class="nt" title="${esc(note)}" style="-webkit-line-clamp:${noteLines(n)};max-height:${noteLines(n)*15}px">${esc(note)}</div>`:"")+
     (iss?`<span class="badge" aria-label="Проблем: ${iss.count||1}">${iss.count||"!"}</span>`:"")+
     Array.from({length:p.ins},(_,i)=>{const handle=inHandle(n,i+1),isSource=handle==="source";
@@ -238,7 +250,9 @@ addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.targe
 let lastEdgeClick={};
 function removeEdge(id){if(running)return;wf.edges=wf.edges.filter(e=>e.id!==id);if(sel?.t==="e"&&sel.id===id)sel=null;clearReport();toast("Связь удалена")}
 function clearReport(refreshInspector=true){report=null;historicalReport=false;pick=null;render(refreshInspector);renderRep();renderAI()}
-function del(){if(!sel||running)return;if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
+function del(){if(!sel||running)return;
+  if(sel.t==="n"&&["plugin_input","plugin_output"].includes(wf.nodes.find(n=>n.id===sel.id)?.type))return toast("Число входов и выходов меняется в «Настройках» плагина");
+  if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
 let webhookRefs=[],webhookListError="";
 function webhookInspector(selected){
   const refs=webhookRefs.map(ref=>`<option value="${esc(ref)}">${esc(ref)}</option>`).join("");
@@ -299,7 +313,11 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
       <div><label class="f">Выходов</label><select data-c="outputs">${[0,1,2,3,4].map(v=>`<option ${v===+c.outputs?"selected":""}>${v}</option>`).join("")}</select></div></div>
       <label class="f">Цвет</label><div class="swatches">${NODE_COLORS.map(col=>`<button type="button" data-col="${col}" class="${col===c.color?"on":""}" style="background:${col}" aria-label="Цвет ${col}"></button>`).join("")}<input type="color" data-c="color" value="${isColor(c.color)?c.color:"#68766d"}" aria-label="Свой цвет"></div>
       <p class="note">Передаёт входящие и собственные находки на все выходы. Связи с удалёнными портами исчезнут.</p>`;
-    if(n.type==="trigger")h+=triggerInspector(c);
+    if(n.type==="plugin"){const inside=(c.graph?.nodes||[]).filter(x=>x.type!=="plugin_input"&&x.type!=="plugin_output").map(nodeName);
+      h+=`<p class="note">Плагин — отдельный граф: ${esc(portsText(c))}. Находки со входа k попадают в ноду «Вход k» внутри плагина, из ноды «Выход k» уходят дальше.</p>
+      <p class="note">Внутри: ${esc(inside.join(", ")||"только передача находок")}.</p>${pluginEdit?"":`<button class="btn" id="openPluginGraph" style="margin-top:4px">Открыть плагин в редакторе</button>`}`}
+    else if(n.type==="plugin_input"||n.type==="plugin_output")h+=`<p class="note">${n.type==="plugin_input"?`Сюда приходят находки со входа ${c.index} ноды плагина.`:`Находки отсюда уходят с выхода ${c.index} ноды плагина.`} Число входов и выходов меняется в «Настройках» плагина.</p>`;
+    else if(n.type==="trigger")h+=triggerInspector(c);
     else if(n.type==="source")h+=`<label class="f" for="sourcePath">Относительный путь в ZIP</label><input id="sourcePath" data-k="path" type="text" maxlength="500" placeholder="src/main или app.py">
       <p class="note">Соедините выход с портом «Источник» одного или нескольких сканеров.</p>`;
     else if(n.type==="condition")h+=conditionInspector(c);
@@ -312,9 +330,8 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
     if(nodeScanner(n))h+=`<p class="note">Без связи на входе «Источник» проверяется весь ZIP.</p>`;
     if(n.type!=="trigger")h+=`<label class="f" for="nodeNote">Заметка</label><textarea id="nodeNote" maxlength="1000" placeholder="Что проверить или кто отвечает">${esc(c.note||"")}</textarea>
-      ${n.config.privatePluginOwner?"":`<button class="btn" id="saveTpl" style="margin-top:8px">Сохранить в каталоге</button>`}
-      ${n.type==="custom"?`<button class="btn" id="savePlugin" style="margin-top:8px">Сохранить как плагин</button>`:""}`;
-    h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
+      ${n.config.privatePluginOwner||n.type==="plugin"||n.type==="plugin_input"||n.type==="plugin_output"?"":`<button class="btn" id="saveTpl" style="margin-top:8px">Сохранить в каталоге</button>`}`;
+    if(n.type!=="plugin_input"&&n.type!=="plugin_output")h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
   box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
   box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id),key=el.dataset.k;
     el.value=Object.hasOwn(n.config,key)?n.config[key]??"":CONDITION_DEFAULTS[key]??TRIGGER_DEFAULTS[key]??"";
@@ -340,7 +357,7 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     });
     if(note){note.disabled=running;note.oninput=()=>{node.config.note=note.value};note.onchange=()=>{note.value=note.value.trim();node.config.note=note.value;if(!node.config.note)delete node.config.note;render(false)}}
     box.querySelector("#saveTpl")?.addEventListener("click",()=>saveTemplate(node));
-    box.querySelector("#savePlugin")?.addEventListener("click",()=>openPluginEditor({config:node.config}));
+    box.querySelector("#openPluginGraph")?.addEventListener("click",()=>openPluginEditor({config:node.config,canvasNode:node}));
     box.querySelectorAll("[data-c]").forEach(el=>{el.disabled=running;el.onchange=()=>{const k=el.dataset.c;
       const before={...node,config:{...node.config}};
       node.config[k]=k==="inputs"||k==="outputs"?+el.value:k==="title"?(el.value.trim()||"Своя нода"):el.value;
@@ -352,7 +369,7 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
       if(k==="inputs"||k==="outputs"||k==="scanner")updateCustomEdges(node,before);
       clearReport()}});
     box.querySelectorAll("[data-col]").forEach(b=>b.onclick=()=>{if(running)return;node.config.color=b.dataset.col;render()})}
-  $("#delSel").onclick=del}
+  $("#delSel")&&($("#delSel").onclick=del)}
 function updateCustomEdges(node,before){
   const outs=Array.from({length:ports(node).outs},(_,i)=>outHandle(node,i+1));
   const ins=Array.from({length:ports(node).ins},(_,i)=>inHandle(node,i+1));
@@ -384,6 +401,7 @@ function setNodeCatalog(open){
   $("#nodeCatalogBtn").setAttribute("aria-expanded",String(open))
 }
 function addNode(type,config){if(running)return toast("Дождитесь завершения проверки");
+  if(pluginEdit&&!PLUGIN_INNER.has(type))return toast("Внутри плагина можно использовать сканеры, источник, условие, AI-рекомендации и свои ноды");
   if(type==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
   setNodeCatalog(false);
   const n=mk(type,0,0,config),height=nodeHeight(n);
@@ -400,11 +418,13 @@ function portsText(c){return`${plural(+c.inputs||1,"вход","входа","вх
 function left(){const l=$("#leftList");
   if(tab==="my")return loadMy();
   const head=`<div class="seg" role="tablist"><button role="tab" data-lib="std" class="${libTab==="std"?"on":""}">Стандартные</button><button role="tab" data-lib="saved" class="${libTab==="saved"?"on":""}">Сохранённые</button></div>
-    <button class="cat new" id="newNode">＋ Создать свою ноду</button>`;
-  if(libTab==="std")l.innerHTML=head+Object.entries(T).map(([k,t])=>`<button class="cat" data-add="${k}"><span class="dot" style="background:${t.c}"></span><span>${t.n}<small>${t.d}${SUPPORTED.has(k)?"":" (пока черновик)"}</small></span></button>`).join("");
+    <button class="cat new" id="newNode">＋ Создать свою ноду</button>${pluginEdit?"":`<button class="cat new" id="newPluginCat">＋ Создать плагин</button>`}`;
+  const allowed=([k])=>!pluginEdit||PLUGIN_INNER.has(k);
+  if(libTab==="std")l.innerHTML=head+(pluginEdit?`<p class="note" style="margin:0">Редактор плагина: запуск и уведомление здесь недоступны.</p>`:"")+Object.entries(T).filter(allowed).map(([k,t])=>`<button class="cat" data-add="${k}"><span class="dot" style="background:${t.c}"></span><span>${t.n}<small>${t.d}${SUPPORTED.has(k)?"":" (пока черновик)"}</small></span></button>`).join("");
   else{l.innerHTML=head+`<div class="empty">Загрузка…</div>`;loadTemplates()}
   l.querySelectorAll("[data-lib]").forEach(b=>b.onclick=()=>{libTab=b.dataset.lib;left()});
   $("#newNode").onclick=()=>openNodeDialog();
+  $("#newPluginCat")?.addEventListener("click",()=>openPluginEditor());
   l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{const k=b.dataset.add;addNode(k,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:k==="source"?{path:"."}:{})})}
 async function loadTemplates(){const l=$("#leftList"),loading=l.querySelector(".empty");
   let templates;
@@ -433,24 +453,104 @@ function openNodeDialog({pluginMode=false,plugin=null,config={}}={}){
   $("#cnLanguage").innerHTML=languageOptions(config.language);
   $("#cnLanguageRow").hidden=!supportsLanguage(config.scanner);
   $("#cnSave").checked=true;$("#cnSaveRow").hidden=pluginMode;
-  $("#cnPluginFields").hidden=!pluginMode;
-  $("#cnDescription").required=pluginMode;$("#cnDescription").value=plugin?.description||"";
+  $("#cnActionRows").hidden=pluginMode;$("#cnPluginHint").hidden=!pluginMode||!!pluginEdit;
+  $("#cnOut").querySelector('option[value="0"],option:first-child').disabled=pluginMode;
+  if(pluginMode&&+$("#cnOut").value<1)$("#cnOut").value=1;
+  // копия плагина на холсте живёт только в сценарии: описание и доступ нужны лишь плагину в библиотеке
+  const canvasCopy=pluginMode&&!!(pendingPlugin?.canvasNode||pluginEdit?.canvasNodeId);
+  $("#cnPluginFields").hidden=!pluginMode||canvasCopy;
+  $("#cnDescription").required=pluginMode&&!canvasCopy;$("#cnDescription").value=plugin?.description||"";
   $("#cnVisibility").value=plugin?.visibility||"private";
   $("#cnPublicNote").hidden=$("#cnVisibility").value!=="public";
   $("#cnStatus").textContent="";
   $("#cnCreate").disabled=false;
-  $("#cnCreate").textContent=pluginMode?"Сохранить плагин":"Добавить на холст";
+  $("#cnCreate").textContent=pluginMode?(pluginEdit?"Применить":"Открыть редактор"):"Добавить на холст";
   cnColor=isColor(config.color)?config.color:NODE_COLORS[4];paintSwatches();
   $("#ovNode").classList.add("open");$("#cnTitle").focus()
 }
-function openPluginEditor({plugin=null,config=plugin?.config||{}}={}){
-  if(!account){
+function openPluginEditor({plugin=null,config=plugin?.config||{},canvasNode=null}={}){
+  if(!account&&!canvasNode){  // правка ноды на холсте ничего не сохраняет в аккаунт
     toast("Войдите, чтобы сохранить свой плагин.");
     if(!running&&!sourceLoading)openAccountDialog("login");
     return
   }
+  if(pluginEdit)return toast("Сначала сохраните или закройте открытый плагин");
+  pendingPlugin={plugin,graph:config.graph||null,canvasNode};
   openNodeDialog({pluginMode:true,plugin,config})
 }
+// Редактор плагина: холст временно показывает граф плагина, исходный сценарий ждёт в pluginEdit.saved.
+function portNode(type,index,x,y){return{id:(type==="plugin_input"?"in":"out")+index,type,position:{x,y},config:{index}}}
+function syncPluginPorts(meta){
+  for(const [type,count,x] of [["plugin_input",meta.inputs,40],["plugin_output",meta.outputs,720]]){
+    const existing=wf.nodes.filter(n=>n.type===type);
+    for(const n of existing)if(n.config.index>count){wf.nodes=wf.nodes.filter(x=>x!==n);wf.edges=wf.edges.filter(e=>e.source!==n.id&&e.target!==n.id)}
+    for(let k=1;k<=count;k++)if(!existing.some(n=>n.config.index===k)){
+      let id=(type==="plugin_input"?"in":"out")+k;while(wf.nodes.some(n=>n.id===id))id+="_";
+      wf.nodes.push({...portNode(type,k,x,120+(k-1)*120),id})}
+  }
+}
+function showPluginBar(){
+  const meta=pluginEdit.meta;
+  $("#pluginBar").hidden=false;document.body.classList.add("plugin-editing");
+  $("#pluginBarTitle").textContent=meta.title;
+  $("#pluginBarPorts").textContent="· "+portsText(meta)+(pluginEdit.canvasNodeId?" · правка ноды на холсте":"");
+  $("#pluginSave").textContent=pluginEdit.canvasNodeId?"Применить к ноде":"Сохранить плагин";
+  $("#wfName").value=meta.title;$("#wfName").disabled=true
+}
+function enterPluginEditor(meta,graph,plugin,canvasNode=null){
+  pluginEdit={meta,id:plugin?.id||null,owner:account?.id,origin:API,canvasNodeId:canvasNode?.id||null,
+    saved:{wf,sel,report,historicalReport,name:$("#wfName").value,pan:{...pan}}};
+  report=null;historicalReport=false;sel=null;
+  wf={id:"",name:meta.title,nodes:JSON.parse(JSON.stringify(graph?.nodes||[])),edges:JSON.parse(JSON.stringify(graph?.edges||[]))};
+  wf.nodes.forEach(n=>n.config=n.config||{});
+  syncPluginPorts(meta);
+  if(!graph?.edges?.length&&meta.inputs===1&&meta.outputs===1)wf.edges.push({id:eid(),source:"in1",target:"out1"});
+  showPluginBar();focusCanvas();clearReport();left();
+  toast("Соберите шаги плагина между нодами «Вход» и «Выход», затем нажмите «Сохранить плагин».")
+}
+function leavePluginEditor(){
+  const saved=pluginEdit.saved;pluginEdit=null;
+  wf=saved.wf;sel=null;report=saved.report;historicalReport=saved.historicalReport;
+  $("#pluginBar").hidden=true;document.body.classList.remove("plugin-editing");
+  $("#wfName").disabled=false;$("#wfName").value=saved.name;
+  setPan(saved.pan.x,saved.pan.y);render();renderRep();renderAI();left()
+}
+function pluginProblem(){
+  const disconnected=wf.nodes.find(n=>!["plugin_input","source"].includes(n.type)&&!wf.edges.some(e=>e.target===n.id&&e.targetHandle!=="source"));
+  if(disconnected)return`Подключите ноду «${nodeName(disconnected)}»: у каждого шага и каждого выхода должна быть входящая связь.`;
+  const bad=wf.nodes.find(n=>!PLUGIN_INNER.has(n.type));
+  if(bad)return`Нода «${nodeName(bad)}» не может стоять внутри плагина.`;
+  return null
+}
+$("#pluginSettings").onclick=()=>{if(pluginEdit)openNodeDialog({pluginMode:true,plugin:{id:pluginEdit.id,...pluginEdit.meta},config:pluginEdit.meta})};
+$("#pluginCancel").onclick=()=>{if(!pluginEdit)return;if(confirm("Закрыть редактор плагина без сохранения?"))leavePluginEditor()};
+$("#pluginSave").onclick=async()=>{
+  const edit=pluginEdit;if(!edit)return;
+  if(edit.owner!==account?.id||edit.origin!==API)return toast("Аккаунт сменился: войдите снова, чтобы сохранить плагин");
+  const problem=pluginProblem();if(problem)return toast(problem);
+  const {description,visibility,...meta}=edit.meta;
+  const config={...meta,graph:{nodes:wf.nodes.map(n=>({id:n.id,type:n.type,position:n.position,config:n.config})),edges:wf.edges}};
+  if(edit.canvasNodeId){// правка копии плагина на холсте: меняется только эта нода сценария
+    const target=edit.saved.wf.nodes.find(n=>n.id===edit.canvasNodeId);
+    leavePluginEditor();
+    if(!target)return toast("Нода плагина больше не на холсте");
+    const before={...target,config:{...target.config}};
+    target.config={...target.config,...config};
+    if(!meta.note)delete target.config.note;
+    updateCustomEdges(target,before);clearReport();
+    return toast(`Плагин «${meta.title}» на холсте обновлён.`)
+  }
+  const path=edit.id?"/plugins/"+encodeURIComponent(edit.id):"/plugins";
+  $("#pluginSave").disabled=true;
+  try{
+    const saved=await api(path,{method:edit.id?"PUT":"POST",headers:JH,body:JSON.stringify({config,description,visibility})});
+    if(pluginEdit!==edit)return;
+    leavePluginEditor();
+    if(libraryOpen()&&librarySection==="plugins")loadPluginLibrary();
+    toast(`Плагин «${saved.config.title}» сохранён. Добавьте его на холст из «Библиотеки» → «Плагины».`)
+  }catch(error){fail(error)}
+  finally{$("#pluginSave").disabled=false}
+};
 $("#cnScanner").onchange=event=>{
   const languageRow=$("#cnLanguageRow");
   languageRow.hidden=!supportsLanguage(event.target.value);
@@ -471,17 +571,17 @@ $("#customNodeForm").onsubmit=async event=>{
   if(edit.pluginMode){
     if(edit.owner!==account?.id||edit.origin!==API)return;
     const description=$("#cnDescription").value.trim();
-    if(!description){status.textContent="Добавьте описание плагина.";$("#cnDescription").focus();return}
-    const visibility=$("#cnVisibility").value,path=edit.id?"/plugins/"+encodeURIComponent(edit.id):"/plugins";
-    button.disabled=true;status.textContent="";
-    try{
-      await api(path,{method:edit.id?"PUT":"POST",headers:JH,body:JSON.stringify({config,description,visibility})});
-      if(edit.owner!==account?.id||edit.origin!==API)return;
-      if(nodeEditor===edit)$("#ovNode").classList.remove("open");
-      if(libraryOpen()&&librarySection==="plugins")loadPluginLibrary();
-      toast("Плагин сохранён.")
-    }catch(error){if(nodeEditor===edit)status.textContent=error.message}
-    finally{if(nodeEditor===edit)button.disabled=false}
+    const onCanvas=pluginEdit?.canvasNodeId||pendingPlugin?.canvasNode;
+    if(!description&&!onCanvas){status.textContent="Добавьте описание плагина.";$("#cnDescription").focus();return}
+    if(config.outputs<1){status.textContent="У плагина должен быть хотя бы один выход.";return}
+    const meta={title,color:cnColor,inputs:config.inputs,outputs:config.outputs,description,visibility:$("#cnVisibility").value};
+    if(note)meta.note=note;
+    $("#ovNode").classList.remove("open");
+    if(pluginEdit){pluginEdit.meta=meta;syncPluginPorts(meta);showPluginBar();clearReport();return}
+    const pending=pendingPlugin;pendingPlugin=null;
+    if(setNodeCatalog)setNodeCatalog(false);
+    if(libraryOpen())returnToEditor();
+    enterPluginEditor(meta,pending?.graph,pending?.plugin,pending?.canvasNode);
     return
   }
   if(!addNode("custom",{...config}))return;
@@ -504,6 +604,7 @@ $("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("o
 addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
 $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a;
   if(running&&a!=="dl")return toast("Дождитесь завершения проверки");
+  if(pluginEdit&&a!=="dl")return toast("Сначала сохраните или закройте редактор плагина");
   if(a==="generate")return openGenerator();
   if(a==="new"){wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()}
   if(a==="dl"){const{id,...d}=wf;d.name=$("#wfName").value;$("#jsonOut").value=JSON.stringify(d,null,2);$("#ovJson").classList.add("open")}
@@ -665,6 +766,7 @@ function closeAccountDialog(){
   accountButton.focus()
 }
 function resetWorkspace(){
+  if(pluginEdit){pluginEdit=null;$("#pluginBar").hidden=true;document.body.classList.remove("plugin-editing");$("#wfName").disabled=false}
   wf={id:"",name:"Проверка секретов",nodes:[],edges:[]};init();
   $("#wfName").value=wf.name;
   sourceId=null;sourceName="";sel=null;
@@ -837,8 +939,10 @@ $("#newPlugin").onclick=()=>openPluginEditor();
 
 function pluginCard(plugin){
   const card=document.createElement("article");card.className="library-card";
-  const action=T[plugin.config.scanner]?.n||"Передача находок";
-  const language=PLUGIN_NAMES[plugin.config.language];
+  const graph=plugin.config.graph;
+  const inside=graph?(graph.nodes||[]).filter(x=>x.type!=="plugin_input"&&x.type!=="plugin_output").map(nodeName).join(", "):"";
+  const action=graph?`${portsText(plugin.config)} · внутри: ${inside||"только передача находок"}`:T[plugin.config.scanner]?.n||"Передача находок";
+  const language=graph?"":PLUGIN_NAMES[plugin.config.language];
   const access=plugin.visibility==="public"?"Публичный":"Приватный";
   card.innerHTML=`<h3>${esc(plugin.config.title)}</h3><p class="note">${esc(plugin.author)} · ${access}</p>
     <p>${esc(action)}${language?" · "+esc(language):""}</p>
@@ -869,7 +973,8 @@ async function addPluginNode(id,button){
     }
     const config={...plugin.config};
     if(plugin.visibility==="private")config.privatePluginOwner=viewer;
-    returnToEditor();addNode("custom",config)
+    returnToEditor();
+    if(config.graph){config.pluginId=plugin.id;addNode("plugin",config)}else addNode("custom",config)
   }catch(error){fail(error);refreshLibrary()}
   finally{button.disabled=false}
 }
@@ -1042,10 +1147,14 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length!==1)return"В сценарии должен быть ровно один запуск";
   const disconnected=wf.nodes.find(n=>n.type!=="trigger"&&n.type!=="source"&&!wf.edges.some(e=>e.target===n.id&&e.targetHandle!=="source"));
   if(disconnected)return `Подключите ноду «${nodeName(disconnected)}» к потоку сценария.`;
+  const openPlugin=wf.nodes.find(n=>n.type==="plugin"&&Array.from({length:+n.config.inputs||1},(_,i)=>inHandle(n,i+1)).some(h=>!wf.edges.some(e=>e.target===n.id&&(e.targetHandle??null)===h)));
+  if(openPlugin)return `Подключите все входы плагина «${nodeName(openPlugin)}».`;
   const bad=wf.nodes.filter(n=>!SUPPORTED.has(n.type));if(bad.length)return`Нода «${esc(nodeName(bad[0]))}» пока не выполняется бэкендом. Уберите её, чтобы запустить сценарий.`;
   if(wf.nodes.some(n=>n.type==="notify"&&!n.config.webhookRef))return WEBHOOK_ERRORS.invalid_webhook_ref;
   return null}
-$("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)return toast(err);
+$("#runBtn").onclick=async()=>{if(running)return;
+  if(pluginEdit)return toast("Это редактор плагина. Сохраните плагин, добавьте его на холст сценария и запустите сценарий.");
+  const err=validate();if(err)return toast(err);
   if(sourceLoading)return toast("Дождитесь загрузки проекта");
   const schedule=wf.nodes.find(n=>n.type==="trigger"&&n.config.mode==="daily")?.config;
   const runSource=sourceId||schedule?.scheduleSourceId;
@@ -1136,7 +1245,8 @@ function nodeNote(n,s){const o=s.output;
     if(o.aiAvailable)return`<br><small>${aiDoneText(o)}</small>`;
     const st=AI_STAGES.find(x=>x[0]===o.stage);if(st&&s.status==="running")return`<br><small>${st[1]}…</small>`}
   if(s.error)return`<br><small style="color:var(--bad)">${esc(ERR[o?.errorCode]||(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error))}</small>`;
-  if(!o)return"";if(nodeScanner(n))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="custom")return`<br><small>передано находок: ${+o.passed||0}</small>`;
+  if(!o)return"";if(nodeScanner(n))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="custom"||n.type==="plugin_input"||n.type==="plugin_output")return`<br><small>передано находок: ${+o.passed||0}</small>`;
+  if(n.type==="plugin")return`<br><small>внутри ${plural(+o.innerNodes||0,"нода","ноды","нод")} · находок внутри: ${+o.findings||0}</small>`;
   if(n.type==="condition")return`<br><small>ветка «${o.matched?"Да":"Нет"}»${o.count==null?"":` · найдено совпадений: ${esc(o.count)}`}</small>`;
   return""}
 function findingItem(f) {
@@ -1204,9 +1314,12 @@ function renderRep(){const b=$("#repBody");$("#findingsDownload").hidden=!report
   $("#repTag").textContent=(historicalReport?"Из истории · ":"")+report.runId.slice(0,8)+" · "+stLabel(report.status)+(report.triggerMode==="daily"?" · по расписанию":"");
   const fs=report.findings||[];
   const findings=new Map(fs.map(f=>[f.id,f]));
+  const innerNode=id=>{const cut=id.indexOf("/");if(cut<0)return null;const parent=wf.nodes.find(n=>n.id===id.slice(0,cut));
+    const inner=parent?.config?.graph?.nodes?.find(n=>n.id===id.slice(cut+1));return inner?{parent,inner}:null};
   const nodes=new Map(report.nodes.map(result=>[result.nodeId,
-    result.type?{type:result.type,config:{title:result.label}}:wf.nodes.find(n=>n.id===result.nodeId)]));
-  const names=new Map([...nodes].map(([id,node])=>[id,node?nodeName(node):id]));
+    innerNode(result.nodeId)?.inner||(result.type?{type:result.type,config:{...(wf.nodes.find(n=>n.id===result.nodeId)?.config||{}),title:result.label||wf.nodes.find(n=>n.id===result.nodeId)?.config?.title}}:wf.nodes.find(n=>n.id===result.nodeId))]));
+  const names=new Map([...nodes].map(([id,node])=>{const inside=innerNode(id);
+    return[id,inside?`${nodeName(inside.parent)} › ${nodeName(inside.inner)}`:node?nodeName(node):id]}));
   const sameRun=b.dataset.runId===report.runId;
   const openGroups=new Set(sameRun?Array.from(b.querySelectorAll("details[data-group][open]"),e=>e.dataset.group):[]);
   const openTransfers=new Set(sameRun?Array.from(b.querySelectorAll(".node-transfer[open]"),e=>e.dataset.node):[]);

@@ -57,6 +57,12 @@
       <svg class="edges" id="edges"><g id="edgeLayer"></g></svg>
     </div>
       <button class="btn canvas-home" id="canvasHome" title="Перетащите фон, чтобы перемещаться по холсту">К началу графа</button>
+      <div class="plugin-bar" id="pluginBar" hidden role="region" aria-label="Редактор плагина">
+        <span><b>Редактор плагина:</b> <span id="pluginBarTitle"></span> <small id="pluginBarPorts"></small></span>
+        <button class="btn" type="button" id="pluginSettings">Настройки</button>
+        <button class="btn" type="button" id="pluginCancel">Отмена</button>
+        <button class="btn pri" type="button" id="pluginSave">Сохранить плагин</button>
+      </div>
       <button class="fab" id="chatFab" aria-label="Виртуальный помощник" title="Виртуальный помощник">💬</button>
       <aside id="right">
         <div class="ph"><h3>Виртуальный помощник</h3><span class="tag" id="llmTag"></span><button class="btn ico" id="aiToggle" aria-label="Закрыть помощника">×</button></div>
@@ -163,8 +169,9 @@
 <div class="ov" id="ovNode"><form class="modal" id="customNodeForm" role="dialog" aria-modal="true" aria-labelledby="cnHeading">
   <h2 id="cnHeading">Своя нода</h2>
   <label class="f" for="cnTitle">Название</label><input type="text" id="cnTitle" maxlength="40" placeholder="Например, «Ревью тимлида»">
-  <label class="f" for="cnScanner">Действие</label><select id="cnScanner"></select>
-  <div id="cnLanguageRow" hidden><label class="f" for="cnLanguage">Язык проверки</label><select id="cnLanguage"></select></div>
+  <div id="cnActionRows"><label class="f" for="cnScanner">Действие</label><select id="cnScanner"></select>
+  <div id="cnLanguageRow" hidden><label class="f" for="cnLanguage">Язык проверки</label><select id="cnLanguage"></select></div></div>
+  <p class="note" id="cnPluginHint" hidden>Плагин — отдельный маленький проект. После этого окна откроется редактор: в нём уже стоят ноды «Вход» и «Выход» по числу портов, между ними соберите сканеры, условия и другие шаги.</p>
   <div class="ports"><div><label class="f" for="cnIn">Входов</label><select id="cnIn"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
     <div><label class="f" for="cnOut">Выходов</label><select id="cnOut"><option>0</option><option selected>1</option><option>2</option><option>3</option><option>4</option></select></div></div>
   <label class="f">Цвет</label><div class="swatches" id="cnColors"></div>
