@@ -1233,8 +1233,12 @@ function renderRep(){const b=$("#repBody");$("#findingsDownload").hidden=!report
   })}
 let chatState = {runId: null, turns: [], pending: false, error: ""};
 
+// Ассистент: без готового отчёта любое сообщение — описание проверки, из него строится черновик сценария.
+// С отчётом черновик строится по просьбам «создай/сгенерируй/сделай сценарий…», остальное — вопрос по отчёту.
+const GENERATE_INTENT=/(созда|сгенер|сделай|сделать|построй|собери|составь|настрой|нарисуй|добавь сценар)[а-яё]*\s.{0,60}?(сценари|проект|граф|workflow|пайплайн|провер|нод)/i;
+function chatReady(){return !running&&report&&["succeeded","failed"].includes(report.status)}
 function renderChat(scroll = false) {
-  const ready = !running && report && ["succeeded", "failed"].includes(report.status);
+  const ready = chatReady();
   const runId = ready ? report.runId : null;
   const input = $("#chatIn");
   const button = $("#chatBtn");
@@ -1243,19 +1247,47 @@ function renderChat(scroll = false) {
     chatState = {runId, turns: [], pending: false, error: ""};
     input.value = "";
   }
-  input.disabled = button.disabled = !ready || chatState.pending;
-  input.placeholder = ready ? "Вопрос по отчёту…" : "Сначала запустите проверку";
-  button.textContent = chatState.pending ? "Ждём ответ…" : "Спросить";
+  input.disabled = button.disabled = running || chatState.pending;
+  input.placeholder = running ? "Дождитесь завершения проверки" : ready ? "Вопрос по отчёту или «создай сценарий…»" : "Опишите проверку — соберу сценарий";
+  button.textContent = chatState.pending ? "Ждём ответ…" : ready ? "Спросить" : "Создать";
   const waited = chatState.pending ? Math.round((Date.now() - chatState.sentAt) / 1000) : 0;
   const pendingNote = !chatState.pending ? "" : `<div class="msg">${waited >= 20
     ? `Модель отвечает дольше обычного (${waited} с). Локальной модели при первом запросе нужно до минуты.`
-    : "Вопрос отправлен, модель отвечает…"}</div>`;
-  log.innerHTML = chatState.turns.map(turn =>
+    : chatState.generating ? "Собираю черновик сценария…" : "Вопрос отправлен, модель отвечает…"}</div>`;
+  const hint = !ready && !chatState.turns.length && !chatState.pending
+    ? `<div class="msg">Опишите, что проверить, например: «Каждый день в 9:00 ищи секреты и уязвимые зависимости, при высокой критичности отправляй уведомление». Я соберу черновик сценария, его можно открыть на холсте.</div>` : "";
+  log.innerHTML = hint + chatState.turns.map((turn, index) =>
+    turn.draft ? draftMessage(turn, index) :
     `<div class="msg ${turn.role === "user" ? "me" : ""}">${turn.role === "user" ? esc(turn.content) : fmtAnswer(turn.content)}</div>`
   ).join("") + pendingNote + (chatState.error
     ? `<div class="warn">${esc(chatState.error)}<br><button type="button" class="btn" id="chatRetry">Отправить ещё раз</button></div>` : "");
   $("#chatRetry")?.addEventListener("click", () => $("#reportChat").requestSubmit());
+  log.querySelectorAll("[data-draft]").forEach(b => b.onclick = () => openDraft(chatState.turns[+b.dataset.draft]));
   if (scroll) log.parentElement.scrollTop = log.parentElement.scrollHeight;
+}
+function draftMessage(turn, index) {
+  const nodes = turn.draft.nodes.map(nodeName).join(" → ");
+  return `<div class="msg"><b>Черновик: ${esc(turn.draft.name)}</b><br><small>${esc(nodes)}</small>
+    ${turn.warnings.length ? `<ul style="margin:6px 0 0;padding-left:18px">${turn.warnings.map(w => `<li><small>${esc(w)}</small></li>`).join("")}</ul>` : ""}
+    <br><button type="button" class="btn pri" data-draft="${index}" ${running ? "disabled" : ""}>Открыть на холсте</button></div>`;
+}
+function openDraft(turn) {
+  if (running) return toast("Дождитесь завершения проверки");
+  if (!turn?.draft) return;
+  if (wf.nodes.length > 3 && !confirm("Заменить текущий сценарий на холсте черновиком? Несохранённые изменения пропадут.")) return;
+  wf = JSON.parse(JSON.stringify({...turn.draft, id: ""}));
+  wf.nodes.forEach(n => n.config = n.config || {});
+  $("#wfName").value = wf.name; sel = null; focusCanvas(); clearReport();
+  toast("Черновик открыт. Проверьте ноды и нажмите «Запустить».");
+}
+function draftWarnings(result) {
+  const warnings = [];
+  if (result.needsSource) {
+    const trigger = result.draft.nodes.find(n => n.type === "trigger");
+    warnings.push(`Запуск ежедневно в ${trigger.config.scheduleTime} (${trigger.config.scheduleTimezone}). Закрепите загруженный проект в ноде «Запуск».`);
+  }
+  if (result.needsRecipient) warnings.push("Выберите получателя в ноде «Уведомление».");
+  return warnings;
 }
 
 // Ответы модели — обычный текст. Подсвечиваем только `код` и **жирный**, после экранирования.
@@ -1263,28 +1295,43 @@ function fmtAnswer(text) {
   return esc(text).replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
 }
 
+const GENERATION_ERRORS = {
+  consent_required: "Чтобы отправить описание в DeepSeek, отметьте согласие в настройках (⚙) или выберите локальную модель.",
+  unsupported_generation: "Опишите проверку учебного проекта: поиск секретов, SCA, SAST, условия, AI-рекомендации, уведомление, ручной или ежедневный запуск.",
+  invalid_response: "Модель не смогла составить корректный сценарий. Уточните описание и повторите."
+};
 $("#reportChat").onsubmit = async event => {
   event.preventDefault();
   const input = $("#chatIn");
   const question = input.value.trim();
   const state = chatState;
-  if (!question || !state.runId || state.pending || running) return;
-  const history = state.turns.slice(-8).map(turn => ({...turn, content: turn.content.slice(0, 2000)}));
+  if (!question || state.pending || running) return;
+  const generate = !state.runId || GENERATE_INTENT.test(question);
+  const history = state.turns.filter(turn => !turn.draft).slice(-8).map(turn => ({role: turn.role, content: turn.content.slice(0, 2000)}));
   state.turns.push({role: "user", content: question});
   state.pending = true;
+  state.generating = generate;
   state.sentAt = Date.now();
   state.error = "";
   input.value = "";
   renderChat(true);
   const slowTimer = setTimeout(() => { if (chatState === state && state.pending) renderChat(true) }, 20500);
   try {
-    const reply = await api(`/runs/${encodeURIComponent(state.runId)}/chat`, {
-      method: "POST", headers: JH, body: JSON.stringify({question, history, ...modelChoice()})
-    });
-    state.turns.push({role: "assistant", content: reply.answer});
+    if (generate) {
+      const choice = modelChoice();
+      const result = await api("/workflows/generate", {method: "POST", headers: JH, body: JSON.stringify({
+        description: question.slice(0, 1000), ...choice, timezone: TRIGGER_DEFAULTS.scheduleTimezone
+      })});
+      state.turns.push({role: "assistant", content: `Черновик сценария «${result.draft.name}»`, draft: result.draft, warnings: draftWarnings(result)});
+    } else {
+      const reply = await api(`/runs/${encodeURIComponent(state.runId)}/chat`, {
+        method: "POST", headers: JH, body: JSON.stringify({question, history, ...modelChoice()})
+      });
+      state.turns.push({role: "assistant", content: reply.answer});
+    }
   } catch (error) {
     state.turns.pop();
-    state.error = LLM_ERRORS[error.code] || error.message || "Не удалось получить ответ.";
+    state.error = (generate && GENERATION_ERRORS[error.code]) || LLM_ERRORS[error.code] || error.message || "Не удалось получить ответ.";
     if (chatState === state) input.value = question;
   } finally {
     clearTimeout(slowTimer);
@@ -1327,7 +1374,7 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
   const open=new Set(sameRun?Array.from(b.querySelectorAll("details[open]"),d=>d.dataset.g):[]);
   b.dataset.runId=report?.runId||"";
   const stage=active?aiStageBox(active):"";
-  if(!a){b.innerHTML=stage||`<div class="empty">${failed?esc(LLM_ERRORS[failed.errorCode]||"Модель недоступна. Находки сохранены."):"Добавьте ноду «AI-рекомендации» после анализаторов, чтобы получить советы автоматически, или задайте вопрос по готовому отчёту."}</div>`;return}
+  if(!a){b.innerHTML=stage||`<div class="empty">${failed?esc(LLM_ERRORS[failed.errorCode]||"Модель недоступна. Находки сохранены."):"Добавьте ноду «AI-рекомендации» после анализаторов, чтобы получить советы автоматически. В чате ниже можно описать проверку — ассистент соберёт сценарий, а после запуска ответит на вопросы по отчёту."}</div>`;return}
   if(!a.groups?.length){// отчёт старой версии бэкенда: рекомендации по одной находке
     b.innerHTML=stage+`<div class="rec"><b>Итог</b>${esc(a.summary)}</div>`+a.recommendations.map(r=>{const f=(report.findings||[]).find(x=>x.id===r.findingId);return f?`<div class="rec ${pick===f.id?"pick":""}"><b>${esc(f.file)}${f.line?":"+f.line:""}</b>${esc(r.explanation)}<br><br><i>Что сделать:</i> ${esc(r.remediation)}</div>`:""}).join("");return}
   const byId=Object.fromEntries(a.groups.map(g=>[g.id,g]));

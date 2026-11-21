@@ -38,7 +38,7 @@ class WorkflowGeneratorTest(unittest.TestCase):
             "notification": "match",
             "scheduleTime": "14:00",
         })
-        response = self.generate()
+        response = self.generate(description="Каждый день в 14:00 проверь секреты и зависимости, дай AI-рекомендации и отправь уведомление, если есть находки высокой критичности.")
         self.assertEqual(response.status_code, 200)
         result = response.json()
         self.assertTrue(result["needsSource"])
@@ -53,7 +53,7 @@ class WorkflowGeneratorTest(unittest.TestCase):
         self.assertEqual(draft.edges[-1].sourceHandle, "true")
         self.assertEqual(self.storage.mock_calls, [])
         self.assertEqual(self.model.complete.call_args.args[0][1], {
-            "role": "user", "content": "Проверь учебный ZIP на секреты.",
+            "role": "user", "content": "Каждый день в 14:00 проверь секреты и зависимости, дай AI-рекомендации и отправь уведомление, если есть находки высокой критичности.",
         })
         draft.nodes[0].config["scheduleSourceId"] = "approved-source"
         draft.nodes[-1].config["webhookRef"] = "approved-receiver"
@@ -65,10 +65,13 @@ class WorkflowGeneratorTest(unittest.TestCase):
                         "condition": {"conditionMode": "regex", "field": "file", "pattern": "(?=invalid)"}}),
             json.dumps({"name": "Draft", "scanners": ["secrets"], "explain": True}),
         ]
-        response = self.generate()
+        response = self.generate(description="Проверь секреты и дай рекомендации по файлам, подходящим под регулярное выражение.")
         self.assertEqual(response.status_code, 200)
         plan_run(WorkflowDraft.model_validate(response.json()["draft"]))
         self.assertEqual(self.model.complete.call_count, 2)
+        retry = self.model.complete.call_args.args[0][-1]["content"]
+        self.assertIn("Ответ отклонён", retry)  # the model hears why, not a bare "fix it"
+        self.assertNotEqual(retry.split(":", 1)[1].strip(), "")
 
     def test_untrusted_model_cannot_supply_a_webhook_url(self):
         self.model.complete.return_value = json.dumps({
@@ -89,6 +92,44 @@ class WorkflowGeneratorTest(unittest.TestCase):
         response = self.generate()
         self.assertEqual((response.status_code, response.json()["code"]), (422, "unsupported_generation"))
         self.model.complete.assert_called_once()
+
+    def test_parts_the_user_did_not_ask_for_are_dropped(self):
+        # real qwen3:8b answers: a conditional notification without a condition, every scanner, a foreign time zone
+        cases = [
+            ("каждый день в 10:00 статический анализ",
+             {"name": "SAST", "scanners": ["sast"], "condition": None, "notification": "no_match", "scheduleTime": "10:00"},
+             ["trigger", "sast"], False),
+            ("Создай сценарий: каждый день в 10:00 SAST и уведомление",
+             {"name": "SAST", "scanners": ["sast", "sca", "secrets"], "condition": {"conditionMode": "severity", "minSeverity": "high"},
+              "notification": "match", "scheduleTime": "10:00", "scheduleTimezone": "America/Los_Angeles"},
+             ["trigger", "sast", "notify"], True),
+            ("проверь секреты",
+             {"name": "Секреты", "scanners": ["secrets"], "explain": True, "notification": "always", "scheduleTime": "09:00"},
+             ["trigger", "secrets"], False),
+        ]
+        for description, answer, types, notify in cases:
+            with self.subTest(description=description):
+                self.model.complete.reset_mock()
+                self.model.complete.side_effect = None
+                self.model.complete.return_value = json.dumps(answer)
+                response = self.generate(description=description)
+                self.assertEqual(response.status_code, 200, response.text)
+                result = response.json()
+                draft = WorkflowDraft.model_validate(result["draft"])
+                self.assertEqual([n.type for n in draft.nodes], types)
+                self.assertEqual(result["needsRecipient"], notify)
+                self.model.complete.assert_called_once()
+                trigger = draft.nodes[0].config
+                if "10:00" in description:
+                    self.assertEqual(trigger, {"mode": "daily", "scheduleTime": "10:00", "scheduleTimezone": "Europe/Moscow"})
+                else:
+                    self.assertEqual(trigger, {"mode": "manual"})
+
+    def test_named_time_zone_and_time_come_from_the_description(self):
+        self.model.complete.return_value = json.dumps({"name": "Daily", "scanners": ["secrets"], "scheduleTime": "08:00"})
+        response = self.generate(description="Ежедневно в 7.30 по Asia/Tokyo ищи пароли")
+        self.assertEqual(response.json()["draft"]["nodes"][0]["config"],
+                         {"mode": "daily", "scheduleTime": "07:30", "scheduleTimezone": "Asia/Tokyo"})
 
     def test_scoped_description_creates_a_source_edge_for_each_scanner(self):
         self.model.complete.return_value = json.dumps({

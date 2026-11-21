@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -69,6 +70,46 @@ AI-рекомендации, если нужны, ставятся после с
 от неподдерживаемой операции или периодичности, верни {"unsupported":true}.
 Для обычного запроса на проверку безопасности без указания анализаторов используй все три.
 Не включай адреса получателей, идентификаторы источников и команды."""
+
+
+# Small models add what nobody asked for: every scanner, a notification, a schedule in another time zone.
+# The draft keeps only what the description mentions; the model still decides the rest of the structure.
+MENTIONS = {
+    "secrets": re.compile(r"секрет|парол|токен|ключ|secret|credential|password|token", re.I),
+    "sca": re.compile(r"зависимост|библиотек|пакет|\bcve\b|\bsca\b|dependenc", re.I),
+    "sast": re.compile(r"\bsast\b|статическ|static|опасн\w* код|инъекц|injection|\bsql\b", re.I),
+}
+NOTIFY = re.compile(r"уведом|оповещ|сообщ|отправ|webhook|вебхук|notify|notification|алерт|alert", re.I)
+EXPLAIN = re.compile(r"\bai\b|\bии\b|рекоменд|объясн|совет|нейросет|explain|recommend", re.I)
+CONDITION = re.compile(r"критич|severity|high|critical|medium|низк|средн|высок|больше|меньше|не менее|не более|хотя бы|"
+                       r"порог|количеств|регуляр|regex|выражени|если\s+(?:есть|будут|найд|обнаруж)|\bif\b", re.I)
+SCHEDULE = re.compile(r"кажд\w* (?:день|сутки|утро|вечер)|ежедневн|daily|every day|\b\d{1,2}[:.]\d{2}\b", re.I)
+SCHEDULE_TIME = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
+ZONE = re.compile(r"\b[A-Z][A-Za-z_]+/[A-Z][A-Za-z_]+(?:/[A-Z][A-Za-z_]+)?\b|\bUTC\b")
+
+
+def _align_with_description(value: dict, description: str) -> dict:
+    """Drop parts of the model's answer that the user did not ask for."""
+    value = dict(value)
+    mentioned = [kind for kind, pattern in MENTIONS.items() if pattern.search(description)]
+    if mentioned and isinstance(value.get("scanners"), list):
+        value["scanners"] = mentioned
+    if not NOTIFY.search(description):
+        value["notification"] = None
+    if not EXPLAIN.search(description):
+        value["explain"] = False
+    if value.get("condition") is not None and not CONDITION.search(description):
+        value["condition"] = None
+    if value.get("notification") in ("match", "no_match") and value.get("condition") is None:
+        value["notification"] = "always"
+    if not SCHEDULE.search(description):
+        value["scheduleTime"] = None
+    else:
+        time = SCHEDULE_TIME.search(description)
+        value["scheduleTime"] = f"{int(time.group(1)):02d}:{time.group(2)}" if time else value.get("scheduleTime") or "09:00"
+    zone = ZONE.search(description)
+    value["scheduleTimezone"] = zone.group(0) if zone and value.get("scheduleTime") else None
+    return value
 
 
 def _check_timezone(name: str) -> None:
@@ -143,15 +184,20 @@ def generate_workflow(request: WorkflowGenerationRequest, client: ChatClient) ->
             value = json.loads(response)
             if isinstance(value, dict) and len(value) == 1 and value.get("unsupported") is True:
                 raise ApiProblem(422, "unsupported_generation", "Describe a workflow using the supported security checks.")
-            return _build_draft(GeneratedIntent.model_validate(value), request.timezone)
+            if not isinstance(value, dict):
+                raise ValueError("The answer must be one JSON object.")
+            return _build_draft(GeneratedIntent.model_validate(_align_with_description(value, request.description)), request.timezone)
         except ApiProblem as error:
             if error.code == "unsupported_generation":
                 raise
+            problem = str(error)[:300]
         except LlmError as error:
             if error.code not in ("invalid_response", "incomplete_response"):
                 raise
-        except ValueError:
-            pass
+            problem = "ответ не является корректным JSON-объектом"
+        except ValueError as error:
+            problem = str(error).splitlines()[0][:300]
         if attempt == 0:
-            messages.append({"role": "user", "content": "Исправь формат и поля по схеме. Верни один полный JSON-объект."})
+            # tell the model what was wrong: a bare "fix it" made it repeat the same answer
+            messages.append({"role": "user", "content": f"Ответ отклонён: {problem}. Исправь по схеме и верни один полный JSON-объект."})
     raise LlmError("invalid_response", "The model could not produce a valid workflow draft.")
