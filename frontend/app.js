@@ -1,6 +1,7 @@
 const T={trigger:{n:"Запуск",d:"Вручную или по расписанию",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Критичность, количество или регулярное выражение",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
 const SCANNERS=new Set(["secrets","sca","sast"]);
-const SUPPORTED=new Set(["trigger","condition","ai","notify","custom",...SCANNERS]);
+T.source={n:"Источник",d:"Файл или папка внутри ZIP",c:"#16767c"};
+const SUPPORTED=new Set(["trigger","source","condition","ai","notify","custom",...SCANNERS]);
 // Свои ноды: название, цвет и число портов хранятся в config. Порты с номерами («in2», «out3»)
 // нужны только когда их больше одного, так же их проверяет бэкенд.
 const NODE_COLORS=["#2f6b4f","#b3261e","#d9622b","#c79a14","#2d6cdf","#7a5ac8","#5a8bb5","#68766d"];
@@ -8,10 +9,10 @@ const isColor=c=>typeof c==="string"&&/^#[0-9a-fA-F]{6}$/.test(c);
 const nodeName=n=>n.type==="custom"?(n.config?.title||"Своя нода"):(T[n.type]?.n||n.type);
 const nodeColor=n=>n.type==="custom"?(isColor(n.config?.color)?n.config.color:"#68766d"):(T[n.type]?.c||"#68766d");
 function ports(n){if(n.type==="custom")return{ins:+n.config.inputs||1,outs:Math.max(0,+n.config.outputs||0)};
-  return{ins:n.type==="trigger"?0:1,outs:n.type==="condition"?2:1}}
+  return{ins:["trigger","source"].includes(n.type)?0:SCANNERS.has(n.type)?2:1,outs:n.type==="condition"?2:1}}
 function outHandle(n,k){if(n.type==="condition")return k===1?"true":"false";return n.type==="custom"&&ports(n).outs>1?"out"+k:null}
-function inHandle(n,k){return n.type==="custom"&&ports(n).ins>1?"in"+k:null}
-function handleIndex(n,h,out){if(!h)return 1;if(h==="true")return 1;if(h==="false")return 2;return +h.replace(/\D/g,"")||1}
+function inHandle(n,k){if(SCANNERS.has(n.type)&&k===2)return "source";return n.type==="custom"&&ports(n).ins>1?"in"+k:null}
+function handleIndex(n,h,out){if(!h)return 1;if(h==="true")return 1;if(h==="false"||h==="source")return 2;return +h.replace(/\D/g,"")||1}
 function nodeHeight(n){const p=ports(n);return Math.max(72,22*Math.max(p.ins,p.outs)+28)+(n.config?.note?18:0)}
 function portY(n,k,count){return Math.round(nodeHeight(n)*k/(count+1))}
 const SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
@@ -23,7 +24,12 @@ const RULES={
   "tls-verification":"Ослабленная проверка TLS",
   "credentialed-cors":"Широкий CORS с учётными данными",
   "route-authorization":"Проверка доступа к маршруту",
-  "object-authorization":"Проверка доступа к объекту"
+  "object-authorization":"Проверка доступа к объекту",
+  "python-dynamic-code":"Выполнение динамического кода Python",
+  "python-shell":"Запуск команды через оболочку",
+  "python-pickle":"Небезопасная десериализация Python",
+  "js-dynamic-code":"Выполнение динамического JavaScript",
+  "js-html-assignment":"Небезопасная вставка HTML"
 };
 const LLM_ERRORS={
   not_configured:"Модель не настроена на бэкенде.",
@@ -51,16 +57,25 @@ const WEBHOOK_ERRORS={
 };
 const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Выберите ручной или ежедневный запуск.",invalid_schedule:"Проверьте время и часовой пояс расписания, например Europe/Moscow.",schedule_source_required:"Загрузите проект и закрепите его в настройках запуска.",invalid_node_config:"Проверьте настройки ноды.",invalid_condition:"Проверьте режим, критичность и порог в настройках условия.",invalid_condition_regex:"Введите корректное регулярное выражение RE2 до 160 символов. Обратные ссылки и проверки вперёд или назад не поддерживаются.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+Object.assign(ERR,{
+  invalid_scan_source:"Укажите относительный путь к файлу или папке внутри ZIP.",
+  invalid_scan_source_edge:"Соедините один «Источник» с одноимённым входом сканера.",
+  scan_source_not_found:"Файл или папка отсутствует в архиве."
+});
 const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
 // локальная разработка: API на :8000; сайт через tools/serve_site.py: API на том же адресе под /api
 const DEFAULT_API=["5173","3000"].includes(location.port)||location.protocol==="file:"?"http://127.0.0.1:8000":location.origin+"/api";
 let API=ls.get("cg_api")||DEFAULT_API;
+const accountTokenKey=()=>"cg_account_session:"+API;
+let account=null;
 async function api(path,opt){let r;
-  try{r=await fetch(API+path,opt)}catch(e){throw{code:"network",message:`Нет связи с бэкендом (${API}). Проверьте, что uvicorn запущен и страница открыта с http://localhost:5173 или :3000: другие адреса бэкенд не пускает (CORS).`}}
+  const token=ss.get(accountTokenKey()),headers=new Headers(opt?.headers);
+  if(token)headers.set("X-CodeBloodhound-Session",token);
+  try{r=await fetch(API+path,{...opt,headers,redirect:token?"error":"follow"})}catch(e){throw{code:"network",message:`Нет связи с бэкендом (${API}). Проверьте, что uvicorn запущен и страница открыта с http://localhost:5173 или :3000: другие адреса бэкенд не пускает (CORS).`}}
   let b=null;try{b=await r.json()}catch(e){}
   if(!r.ok){let m=ERR[b?.code]||WEBHOOK_ERRORS[b?.code]||b?.message||"Ошибка "+r.status;
     if(b?.code==="unsupported_node"){const t=/The (\w+) node/.exec(b.message||"")?.[1];m=`Нода «${T[t]?.n||t}» пока не выполняется бэкендом. Уберите её из сценария, чтобы запустить.`}
-    throw{code:b?.code||"http_"+r.status,message:m}}
+    throw{code:b?.code||"http_"+r.status,message:ACCOUNT_ERRORS[b?.code]||m}}
   return b}
 const JH={"Content-Type":"application/json"};
 let wf={id:"",name:"Поиск секретов",nodes:[],edges:[]};
@@ -80,6 +95,7 @@ const stLabel=s=>({queued:"в очереди",running:"выполняется",s
 const SEV_RANK={critical:0,high:1,medium:2,low:3};
 const worstSeverity=fs=>fs.reduce((a,f)=>SEV_RANK[f.severity]<SEV_RANK[a]?f.severity:a,"low");
 function nodeError(n,s){const o=s.output||{};
+  if(n.type==="source"&&ERR[o.errorCode])return ERR[o.errorCode];
   if(n.type==="notify"&&o.errorCode)return WEBHOOK_ERRORS[o.errorCode]||(o.statusCode?`Получатель вернул HTTP ${o.statusCode}.`:s.error);
   return s.error==="Node execution failed."?"Нода завершилась с ошибкой.":s.error||"Нода завершилась с ошибкой."}
 function nodeIssues(n){const s=historicalReport?null:report?.nodes.find(x=>x.nodeId===n.id);if(!s||s.status==="running"||s.status==="queued")return null;
@@ -113,9 +129,10 @@ function render(refreshInspector=true){
     e.innerHTML=`<span class="bar" style="background:${nodeColor(n)}"></span><b>${esc(nodeName(n))}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается"}</div>`+
     (note?`<div class="nt" title="${esc(note)}">${esc(note)}</div>`:"")+
     (iss?`<span class="badge" aria-label="Проблем: ${iss.count||1}">${iss.count||"!"}</span>`:"")+
-    Array.from({length:p.ins},(_,i)=>`<span class="h in" data-in="${esc(n.id)}" data-hi="${inHandle(n,i+1)||""}" style="top:${portY(n,i+1,p.ins)-7}px" title="Вход${p.ins>1?" "+(i+1):""}"></span>`).join("")+
+    Array.from({length:p.ins},(_,i)=>{const handle=inHandle(n,i+1),isSource=handle==="source";
+      return `<span class="h in${isSource?" scope-port":""}" data-in="${esc(n.id)}" data-hi="${handle||""}" style="top:${portY(n,i+1,p.ins)-7}px" title="${isSource?"Источник (необязательно)":p.ins>1&&!SCANNERS.has(n.type)?"Вход "+(i+1):"Вход потока"}"></span>`}).join("")+
     Array.from({length:p.outs},(_,i)=>{const h=outHandle(n,i+1),cls=h==="true"?"t":h==="false"?"f":"out",
-      label=h==="true"?"Выход «да»":h==="false"?"Выход «нет»":"Выход"+(p.outs>1?" "+(i+1):"");
+      label=n.type==="source"?"Путь к файлу или папке":h==="true"?"Выход «да»":h==="false"?"Выход «нет»":"Выход"+(p.outs>1?" "+(i+1):"");
       return`<span class="h ${cls}" data-out="${esc(n.id)}" data-hd="${h||""}" style="top:${portY(n,i+1,p.outs)-7}px" title="${label}"></span>`}).join("");
     e.style.height=nodeHeight(n)+"px";
     if(sel?.t==="n"&&sel.id===n.id)e.classList.add("sel");
@@ -183,6 +200,8 @@ bd.addEventListener("pointerdown",ev=>{
     const up=e=>{edges();if(e.type==="pointercancel")return;
       const t=document.elementFromPoint(e.clientX,e.clientY)?.closest("[data-in]");if(!t)return;const tid=t.dataset.in,hi=t.dataset.hi||undefined;
       if(tid===src.id)return toast("Нельзя соединить ноду с самой собой");
+      if((src.type==="source")!==(hi==="source"))return toast("Соедините «Источник» с одноимённым входом сканера");
+      if(hi==="source"&&wf.edges.some(x=>x.target===tid&&x.targetHandle==="source"))return toast("У сканера уже есть источник");
       if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&x.sourceHandle===hd&&x.targetHandle===hi))return toast("Такая связь уже есть");
       if(cycle(src.id,tid))return toast("Циклы запрещены: связь замкнёт сценарий");
       wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{}),...(hi?{targetHandle:hi}:{})});clearReport()};
@@ -247,14 +266,21 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
       <label class="f">Цвет</label><div class="swatches">${NODE_COLORS.map(col=>`<button type="button" data-col="${col}" class="${col===c.color?"on":""}" style="background:${col}" aria-label="Цвет ${col}"></button>`).join("")}<input type="color" data-c="color" value="${isColor(c.color)?c.color:"#68766d"}" aria-label="Свой цвет"></div>
       <p class="note">Передаёт находки со входов на все выходы. Лишние связи при уменьшении портов удаляются.</p>`;
     if(n.type==="trigger")h+=triggerInspector(c);
+    else if(n.type==="source")h+=`<label class="f" for="sourcePath">Относительный путь в ZIP</label><input id="sourcePath" data-k="path" type="text" maxlength="500" placeholder="src/main или app.py">
+      <p class="note">Соедините выход с портом «Источник» одного или нескольких сканеров.</p>`;
     else if(n.type==="condition")h+=conditionInspector(c);
     else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в коде и конфигурации. В отчёте указывает файл и строку без значения секрета.</p>`;
     else if(n.type==="sca")h+=`<p class="note">Сверяет версии зависимостей Gradle со справочником Maven. Справочник берётся из архива или из настроек сервера.</p>`;
-    else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin-код на ошибки в SQL, настройках TLS и CORS, правилах доступа к маршрутам и записям.</p>`;
+    else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin и языки подключённых плагинов по правилам статического анализа.</p>`;
     else if(n.type==="ai")h+=`<p class="note">Объясняет находки и предлагает исправления. Модель выбирается в настройках редактора. При сбое модели отчёт показывает подсказки по правилам сканеров.</p>`;
     else if(n.type==="notify")h+=webhookInspector(c.webhookRef);
     else if(n.type==="custom");  // настройки своей ноды выведены выше
     else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
+    if(SCANNERS.has(n.type))h+=`<p class="note">Без связи на входе «Источник» проверяется весь ZIP.</p>`;
+    if(["sast","secrets"].includes(n.type)){
+      const plugins=(wf.id?wf.languagePlugins:account?.languagePlugins)||[];
+      if(plugins.length)h+=`<p class="note">Языковые плагины: ${esc(plugins.map(id=>PLUGIN_NAMES[id]).join(", "))}.</p>`
+    }
     if(n.type!=="trigger")h+=`<label class="f" for="nodeNote">Заметка</label><textarea id="nodeNote" maxlength="1000" placeholder="Что проверить или кто отвечает">${esc(c.note||"")}</textarea>
       <button class="btn" id="saveTpl" style="margin-top:8px">Сохранить ноду в библиотеку</button>`;
     h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
@@ -263,7 +289,7 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     el.value=Object.hasOwn(n.config,key)?n.config[key]??"":CONDITION_DEFAULTS[key]??TRIGGER_DEFAULTS[key]??"";
     el.disabled=running;
     el.onchange=()=>{
-      n.config[key]=el.type==="number"?(el.value===""?null:Number(el.value)):el.value;
+      n.config[key]=el.type==="number"?(el.value===""?null:Number(el.value)):key==="path"?el.value.trim():el.value;
       if(key==="conditionMode"){
         const keys={severity:["minSeverity"],count:["countMinSeverity","comparison","threshold"],regex:["field"]}[el.value];
         for(const name of keys){if(!Object.hasOwn(n.config,name))n.config[name]=CONDITION_DEFAULTS[name]}
@@ -321,7 +347,7 @@ function left(){const l=$("#leftList");
   else{l.innerHTML=head+`<div class="empty">Загрузка…</div>`;loadTemplates()}
   l.querySelectorAll("[data-lib]").forEach(b=>b.onclick=()=>{libTab=b.dataset.lib;left()});
   $("#newNode").onclick=openNodeDialog;
-  l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{const k=b.dataset.add;addNode(k,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:{})})}
+  l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{const k=b.dataset.add;addNode(k,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:k==="source"?{path:"."}:{})})}
 async function loadTemplates(){const l=$("#leftList");
   try{templates=await api("/node-templates")}catch(e){if(tab==="cat"&&libTab==="saved")l.querySelector(".empty").textContent=e.message||"Не удалось загрузить сохранённые ноды";return}
   if(tab!=="cat"||libTab!=="saved")return;
@@ -344,14 +370,17 @@ $("#cnCreate").onclick=async()=>{const title=$("#cnTitle").value.trim();if(!titl
   $("#ovNode").classList.remove("open");addNode("custom",JSON.parse(JSON.stringify(config)));
   if($("#cnSave").checked){try{await api("/node-templates",{method:"POST",headers:JH,body:JSON.stringify({name:title,type:"custom",config})});toast("Нода добавлена и сохранена");if(tab==="cat"&&libTab==="saved")left()}catch(e){fail(e)}}};
 async function loadMy(){const l=$("#leftList");l.innerHTML=`<div class="empty">Загрузка…</div>`;
+  const token=ss.get(accountTokenKey()),origin=API;
   try{const list=await api("/workflows");
-    l.innerHTML=`<p class="note" style="margin:0 0 4px">Общее рабочее пространство: сценарии видны всей команде.</p>`+(list.length?list.map((s,i)=>`<button class="cat" data-i="${i}">${esc(s.name)}</button>`).join(""):`<div class="empty">Сохранённых сценариев пока нет. Откройте «Файл» → «Сохранить».</div>`);
+    if(tab!=="my"||token!==ss.get(accountTokenKey())||API!==origin)return;
+    l.innerHTML=list.length?list.map((s,i)=>`<button class="cat" data-i="${i}"><span>${esc(s.name)}<small>${s.languagePlugins?"Личный сценарий":"Общий сценарий"}</small></span></button>`).join(""):`<div class="empty">Сохранённых сценариев пока нет. Откройте «Файл» → «Сохранить».</div>`;
     l.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{if(running)return toast("Дождитесь завершения проверки");wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()})}
-  catch(e){l.innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
+  catch(e){if(tab==="my"&&token===ss.get(accountTokenKey())&&API===origin)l.innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));left()});
 // сохранение
-async function save(){wf.name=$("#wfName").value.trim()||"Без названия";
-  const r=await api(wf.id?"/workflows/"+wf.id:"/workflows",{method:wf.id?"PUT":"POST",headers:JH,body:JSON.stringify({name:wf.name,nodes:wf.nodes,edges:wf.edges})});wf.id=r.id;return r}
+async function save(){const current=wf;current.name=$("#wfName").value.trim()||"Без названия";
+  const r=await api(current.id?"/workflows/"+current.id:"/workflows",{method:current.id?"PUT":"POST",headers:JH,body:JSON.stringify({name:current.name,nodes:current.nodes,edges:current.edges})});
+  current.id=r.id;current.languagePlugins=r.languagePlugins;return r}
 $("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("open")};
 addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
 $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a;
@@ -463,6 +492,86 @@ async function ping(){const t=$("#apiTag");try{await api("/health");t.textConten
 let llmSettings=null;
 const PROVIDERS={local:"локальная",deepseek:"DeepSeek API"};
 const ss={get:k=>{try{return sessionStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{v==null?sessionStorage.removeItem(k):sessionStorage.setItem(k,v)}catch(e){}}};
+const PLUGIN_NAMES={python:"Python",javascript:"JavaScript и TypeScript"};
+const ACCOUNT_ERRORS={
+  account_required:"Войдите, чтобы управлять языковыми плагинами.",
+  invalid_session:"Сессия истекла. Войдите заново.",
+  invalid_credentials:"Неверное имя пользователя или пароль.",
+  username_taken:"Это имя пользователя уже занято."
+};
+function showAccount(){
+  $("#accountBtn").textContent=account?.username||"Войти";
+  $("#accountForm").hidden=!!account;$("#pluginsForm").hidden=!account;
+  $("#accountName").textContent=account?.username||"";
+  $("#pluginsForm").querySelectorAll("[name=plugin]").forEach(input=>{
+    input.checked=account?.languagePlugins.includes(input.value)||false
+  })
+}
+function resetWorkspace(){
+  wf={id:"",name:"Проверка секретов",nodes:[],edges:[]};init();
+  $("#wfName").value=wf.name;
+  sourceId=null;sourceName="";sel=null;
+  $("#srcTag").textContent="источник не выбран";$("#srcTag").classList.remove("ok");
+  focusCanvas();clearReport();if(tab==="my")left()
+}
+async function restoreAccount(){
+  const origin=API,token=ss.get(accountTokenKey());
+  if(!token){account=null;showAccount();return}
+  try{const restored=await api("/accounts/me");
+    if(origin===API&&token===ss.get(accountTokenKey())){account=restored;showAccount()}}
+  catch(e){
+    if(origin===API&&token===ss.get(accountTokenKey())){
+      if(e.code==="invalid_session")ss.set(accountTokenKey(),null);
+      account=null;showAccount()
+    }
+  }
+}
+$("#accountBtn").onclick=()=>{
+  if(running||sourceLoading)return toast("Дождитесь завершения текущей операции");
+  $("#accountStatus").textContent="";$("#accountPassword").value="";
+  showAccount();$("#ovAccount").classList.add("open");
+  if(!account)$("#accountUsername").focus()
+};
+$("#accountForm").onsubmit=async event=>{
+  event.preventDefault();
+  const button=event.submitter,status=$("#accountStatus"),origin=API;
+  if(!button)return;
+  const password=$("#accountPassword"),username=$("#accountUsername").value.trim();
+  const credentials={username,password:password.value};
+  password.value="";
+  const actions=[...event.currentTarget.querySelectorAll('[type="submit"]')];
+  actions.forEach(action=>action.disabled=true);
+  try{
+    const session=await api("/accounts/"+button.value,{method:"POST",headers:JH,body:JSON.stringify(credentials)});
+    if(API!==origin)return;
+    ss.set(accountTokenKey(),session.token);account=session.account;resetWorkspace();showAccount();
+    status.textContent="Вход выполнен."
+  }catch(error){status.textContent=error.message}
+  finally{actions.forEach(action=>action.disabled=false)}
+};
+$("#pluginsForm").onsubmit=async event=>{
+  event.preventDefault();
+  const status=$("#accountStatus"),button=event.submitter,origin=API,token=ss.get(accountTokenKey());
+  const languagePlugins=[...event.currentTarget.querySelectorAll("[name=plugin]:checked")].map(input=>input.value);
+  button.disabled=true;$("#logoutBtn").disabled=true;
+  try{
+    const updated=await api("/accounts/plugins",{method:"PUT",headers:JH,body:JSON.stringify({languagePlugins})});
+    if(API!==origin||ss.get(accountTokenKey())!==token)return;
+    account=updated;
+    if(wf.languagePlugins)wf.languagePlugins=account.languagePlugins;
+    showAccount();inspector();status.textContent="Плагины сохранены."
+  }catch(error){status.textContent=error.message}
+  finally{button.disabled=false;$("#logoutBtn").disabled=false}
+};
+$("#logoutBtn").onclick=async()=>{
+  const key=accountTokenKey(),token=ss.get(key);
+  try{await api("/accounts/logout",{method:"POST"})}
+  catch(error){if(error.code!=="invalid_session")return fail(error)}
+  if(ss.get(key)===token)ss.set(key,null);
+  if(key!==accountTokenKey())return;
+  account=null;
+  $("#ovAccount").classList.remove("open");resetWorkspace();showAccount()
+};
 function modelLabel(id){const i=String(id||"").indexOf(":");return i<0?"":`${id.slice(i+1)} · ${PROVIDERS[id.slice(0,i)]||id.slice(0,i)}`}
 function tabModel(){return ss.get("cg_model")}
 function activeModel(){return tabModel()||llmSettings?.defaultId||null}
@@ -495,7 +604,7 @@ $("#llmCheck").onclick=async()=>{const id=$("#llmModel").value;if(!id)return;
   finally{$("#llmCheck").disabled=false}};
 $("#gear").onclick=()=>{$("#apiUrl").value=API;$("#ovSet").classList.add("open");loadLlm()};
 $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||DEFAULT_API;
-  if(next!==API){if(running)return toast("Адрес API можно сменить после завершения проверки");webhookRefs=[];webhookListError="Загрузка получателей…";API=next;inspector();ls.set("cg_api",API);ss.set("cg_model",null);ss.set("cg_model_consent",null);const ok=await ping();if(ok)loadLlm();
+  if(next!==API){if(running||sourceLoading)return toast("Адрес API можно сменить после завершения операции");webhookRefs=[];webhookListError="Загрузка получателей…";API=next;account=null;resetWorkspace();showAccount();ls.set("cg_api",API);ss.set("cg_model",null);ss.set("cg_model_consent",null);const ok=await ping();if(ok){loadLlm();restoreAccount()}
     return toast(ok?"Бэкенд на связи. Проверьте модель для нового адреса.":"Нет связи с бэкендом по адресу "+API)}
   const id=$("#llmModel").value;
   if(llmSettings&&id&&id!==activeModel()){
@@ -521,14 +630,16 @@ const REPO_ERRORS={
 };
 async function loadSource(path,options,label){
   if(running||sourceLoading)return;
-  const tag=$("#srcTag"),previous=tag.textContent;
+  const tag=$("#srcTag"),previous=tag.textContent,origin=API,token=ss.get(accountTokenKey());
+  const sameWorkspace=()=>API===origin&&ss.get(accountTokenKey())===token;
   sourceLoading=true;$("#upBtn").disabled=true;$("#repoBtn").disabled=true;
   tag.textContent="Загружаем проект…";
   try{
     const result=await api(path,{method:"POST",...options});
+    if(!sameWorkspace())return;
     sourceId=result.sourceId;sourceName=label;tag.textContent="загружен: "+label;
     tag.classList.add("ok");$("#src").classList.remove("need");clearReport()
-  }catch(e){tag.textContent=previous;toast(REPO_ERRORS[e.code]||e.message)}
+  }catch(e){if(sameWorkspace()){tag.textContent=previous;toast(REPO_ERRORS[e.code]||e.message)}}
   finally{sourceLoading=false;$("#upBtn").disabled=false;$("#repoBtn").disabled=false}
 }
 $("#upBtn").onclick=()=>{if(!running&&!sourceLoading)$("#fileIn").click()};
@@ -549,7 +660,7 @@ $("#repoUrl").onkeydown=e=>{if(e.key==="Enter")$("#repoBtn").click()};
 // запуск
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length!==1)return"В сценарии должен быть ровно один запуск";
-  if(wf.nodes.some(n=>n.type!=="trigger"&&!wf.edges.some(e=>e.target===n.id)))return"У одной из нод нет входящей связи";
+  if(wf.nodes.some(n=>n.type!=="trigger"&&n.type!=="source"&&!wf.edges.some(e=>e.target===n.id&&e.targetHandle!=="source")))return"У одной из нод нет входящей связи потока";
   const bad=wf.nodes.filter(n=>!SUPPORTED.has(n.type));if(bad.length)return`Нода «${esc(nodeName(bad[0]))}» пока не выполняется бэкендом. Уберите её, чтобы запустить сценарий.`;
   if(wf.nodes.some(n=>n.type==="notify"&&!n.config.webhookRef))return WEBHOOK_ERRORS.invalid_webhook_ref;
   return null}
@@ -634,6 +745,7 @@ $("#findingsDownload").onclick=async event=>{
 };
 function nodeNote(n,s){const o=s.output;
   if(n.type==="trigger"&&o?.sourceId)return "<br><small>Проверяется загруженный проект</small>";
+  if(n.type==="source"&&o?.sourcePath)return `<br><small>${esc(o.sourcePath)}</small>`;
   if(n.type==="notify"&&o){
     if(o.delivered)return `<br><small>Отправлено (HTTP ${esc(o.statusCode)})</small>`;
     const reason=WEBHOOK_ERRORS[o.errorCode]||(o.statusCode?`Получатель вернул HTTP ${o.statusCode}.`:s.error);
@@ -642,7 +754,7 @@ function nodeNote(n,s){const o=s.output;
   if(n.type==="ai"&&o){if(o.aiAvailable===false)return`<br><small style="color:var(--bad)">${esc(LLM_ERRORS[o.errorCode]||"Модель недоступна. Находки сохранены.")}${o.fallback?" Показаны карточки без нейросети.":""}</small>`;
     if(o.aiAvailable)return`<br><small>${aiDoneText(o)}</small>`;
     const st=AI_STAGES.find(x=>x[0]===o.stage);if(st&&s.status==="running")return`<br><small>${st[1]}…</small>`}
-  if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
+  if(s.error)return`<br><small style="color:var(--bad)">${esc(ERR[o?.errorCode]||(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error))}</small>`;
   if(!o)return"";if(n.type==="custom")return`<br><small>передано находок: ${+o.passed||0}</small>`;if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;
   if(n.type==="condition")return`<br><small>ветка «${o.matched?"Да":"Нет"}»${o.count==null?"":` · найдено совпадений: ${esc(o.count)}`}</small>`;
   return""}
@@ -658,13 +770,13 @@ function findingItem(f) {
 function transferList(transfers,input,names,findings){
   if(!transfers.length)return `<p class="note">${input?"Ничего не получено.":"Данные дальше не передавались."}</p>`;
   return `<ul class="transfer-list">${transfers.map(transfer=>{
-    const port=transfer.port==="true"?"Выход «Да»":transfer.port==="false"?"Выход «Нет»":
+    const port=transfer.port==="source"?"Источник":transfer.port==="true"?"Выход «Да»":transfer.port==="false"?"Выход «Нет»":
       (input?"Вход":"Выход")+(transfer.port?" "+transfer.port.slice(input?2:3):"");
     const neighbor=names.get(transfer.nodeId)||transfer.nodeId;
     const preview=transfer.findingIds.map(id=>findings.get(id)).filter(Boolean);
     const analyses=transfer.analysisNodeIds.map(id=>names.get(id)||id);
     return `<li><b>${esc(port)}${neighbor?(input?" ← ":" → ")+esc(neighbor):""}</b>
-      <p class="note">${plural(transfer.findingCount,"находка","находки","находок")} · AI-отчётов: ${esc(transfer.analysisCount)}</p>
+      <p class="note">${transfer.sourcePath?esc(transfer.sourcePath):`${plural(transfer.findingCount,"находка","находки","находок")} · AI-отчётов: ${esc(transfer.analysisCount)}`}</p>
       ${preview.length?`<ul class="finding-items">${preview.map(findingItem).join("")}</ul>`:""}
       ${transfer.findingCount>preview.length?`<p class="note">Показано ${preview.length} из ${esc(transfer.findingCount)}.</p>`:""}
       ${analyses.length?`<p class="note">AI-отчёты от: ${esc(analyses.join(", "))}.</p>`:""}</li>`
@@ -847,7 +959,7 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
     +a.groups.map(g=>aiCard(g,open)).join("");
   b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{pick=item.dataset.f;renderRep();renderAI()})}
 $("#wfName").oninput=e=>wf.name=e.target.value;
-init();left();render();renderRep();renderAI();ping().then(ok=>ok&&loadLlm());
+init();left();render();renderRep();renderAI();restoreAccount();ping().then(ok=>ok&&loadLlm());
 
 // Панели и библиотека
 (()=>{
@@ -857,6 +969,6 @@ init();left();render();renderRep();renderAI();ping().then(ok=>ok&&loadLlm());
   $("#libBtn").onclick=lib;$("#libTab").onclick=lib;
   $("#chatFab").onclick=()=>{main.classList.add("ai-open");$("#chatIn").focus()};
   document.querySelector('[data-a="zip"]').addEventListener("click",()=>{if(!running)$("#fileIn").click()});
-  ["ovSet","ovJson","ovHistory","ovGenerate"].forEach(id=>{const o=$("#"+id);o.addEventListener("pointerdown",e=>{if(e.target===o)o.classList.remove("open")})});
+  ["ovSet","ovJson","ovHistory","ovGenerate","ovAccount"].forEach(id=>{const o=$("#"+id);o.addEventListener("pointerdown",e=>{if(e.target===o)o.classList.remove("open")})});
   addEventListener("keydown",e=>{if(e.key==="Escape")document.querySelectorAll(".ov.open").forEach(o=>o.classList.remove("open"))});
 })();

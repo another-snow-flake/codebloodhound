@@ -1,14 +1,16 @@
 import asyncio
+import secrets
 from contextlib import asynccontextmanager, suppress
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, File, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from .accounts import Account, Credentials, PluginSelection, SESSION_HEADER, Session, password_hash, token_digest, verify_password
 from .ai import answer_report_question
 from .exports import export_findings
 from .llm import LlmError, ModelSpec, check_model, client_for, default_model_id, list_model_options, resolve_model
@@ -72,7 +74,8 @@ def create_app(dsn: str | None = None) -> FastAPI:
 
     app = FastAPI(title="Cyber Garden Workflow API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
-        CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"]
+        CORSMiddleware, allow_origins=LOCAL_ORIGINS, allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Content-Type", SESSION_HEADER],
     )
 
     @app.exception_handler(ApiProblem)
@@ -96,6 +99,60 @@ def create_app(dsn: str | None = None) -> FastAPI:
     def health():
         return {"status": "ok"}
 
+    def current_account(request: Request) -> Account | None:
+        token = request.headers.get(SESSION_HEADER)
+        if token is None:
+            return None
+        account = storage.session_account(token_digest(token)) if len(token) == 43 else None
+        if account is None:
+            raise ApiProblem(401, "invalid_session", "Sign in again.")
+        return account
+
+    OptionalAccount = Annotated[Account | None, Depends(current_account)]
+
+    def require_account(account: OptionalAccount) -> Account:
+        if account is None:
+            raise ApiProblem(401, "account_required", "Sign in to manage language plugins.")
+        return account
+
+    SignedIn = Annotated[Account, Depends(require_account)]
+
+    def owned(account: Account | None) -> dict[str, str]:
+        return {"owner_id": account.id} if account else {}
+
+    def issue_session(account: Account) -> Session:
+        token = secrets.token_urlsafe(32)
+        storage.save_session(token_digest(token), account.id)
+        return Session(token=token, account=account)
+
+    @app.post("/accounts/register", status_code=201)
+    def register(credentials: Credentials) -> Session:
+        account = Account(id=uuid4().hex, username=credentials.username.lower(), languagePlugins=[])
+        if not storage.create_account(account, password_hash(credentials.password)):
+            raise ApiProblem(409, "username_taken", "The username is already in use.")
+        return issue_session(account)
+
+    @app.post("/accounts/login")
+    def login(credentials: Credentials) -> Session:
+        record = storage.account_login(credentials.username.lower())
+        if not verify_password(credentials.password, record[1] if record else None):
+            raise ApiProblem(401, "invalid_credentials", "The username or password is incorrect.")
+        return issue_session(record[0])
+
+    @app.get("/accounts/me")
+    def account_details(account: SignedIn) -> Account:
+        return account
+
+    @app.put("/accounts/plugins")
+    def update_language_plugins(selection: PluginSelection, account: SignedIn) -> Account:
+        account.languagePlugins = list(dict.fromkeys(selection.languagePlugins))
+        storage.save_language_plugins(account)
+        return account
+
+    @app.post("/accounts/logout", status_code=204)
+    def logout(request: Request, account: SignedIn):
+        storage.delete_session(token_digest(request.headers[SESSION_HEADER]))
+
     @app.get("/webhooks")
     def list_webhooks() -> list[str]:
         try:
@@ -104,21 +161,23 @@ def create_app(dsn: str | None = None) -> FastAPI:
             raise ApiProblem(503, error.code, str(error)) from None
 
     @app.post("/sources", status_code=201)
-    def upload_source(file: Annotated[UploadFile, File(description="ZIP archive of an approved training project")]) -> SourceCreated:
+    def upload_source(
+        file: Annotated[UploadFile, File(description="ZIP archive of an approved training project")], account: OptionalAccount,
+    ) -> SourceCreated:
         archive = file.file.read(MAX_UPLOAD + 1)
         if len(archive) > MAX_UPLOAD:
             raise ApiProblem(413, "upload_too_large", "Upload a ZIP up to 10 MiB.")
         validate_zip(archive)
-        return save_source(archive)
+        return save_source(archive, account)
 
-    def save_source(archive: bytes) -> SourceCreated:
+    def save_source(archive: bytes, account: Account | None) -> SourceCreated:
         source_id = uuid4().hex
-        storage.save_source(source_id, archive)
+        storage.save_source(source_id, archive, **owned(account))
         return SourceCreated(sourceId=source_id)
 
     @app.post("/sources/repository", status_code=201)
-    def import_repository(source: RepositorySourceRequest) -> SourceCreated:
-        return save_source(download_repository(source.url))
+    def import_repository(source: RepositorySourceRequest, account: OptionalAccount) -> SourceCreated:
+        return save_source(download_repository(source.url), account)
 
     @app.get("/node-templates")
     def list_node_templates() -> list[NodeTemplate]:
@@ -143,8 +202,8 @@ def create_app(dsn: str | None = None) -> FastAPI:
             raise ApiProblem(404, "node_template_not_found", "Saved node not found.")
 
     @app.get("/workflows", response_model_exclude_none=True)
-    def list_workflows() -> list[Workflow]:
-        return storage.list_workflows()
+    def list_workflows(account: OptionalAccount) -> list[Workflow]:
+        return storage.list_workflows(**owned(account))
 
     @app.post("/workflows/generate", response_model_exclude_none=True)
     def generate_workflow_draft(request: WorkflowGenerationRequest) -> GenerationResult:
@@ -154,40 +213,41 @@ def create_app(dsn: str | None = None) -> FastAPI:
         except LlmError as error:
             raise llm_problem(error) from None
 
-    def validate_saved_workflow(draft: WorkflowDraft):
+    def validate_saved_workflow(draft: WorkflowDraft, owner: Account | None):
         schedule = daily_schedule(draft)
         if schedule is None:
             validate_edges(draft)
             return
         plan_run(draft)
-        if storage.get_source(schedule.source_id) is None:
+        if storage.get_source(schedule.source_id, **owned(owner)) is None:
             raise ApiProblem(404, "source_not_found", "The project selected for the schedule was not found.")
 
     @app.post("/workflows", status_code=201, response_model_exclude_none=True)
-    def create_workflow(draft: WorkflowDraft) -> Workflow:
-        validate_saved_workflow(draft)
-        workflow = Workflow(id=uuid4().hex, **draft.model_dump())
-        storage.save_workflow(workflow)
+    def create_workflow(draft: WorkflowDraft, account: OptionalAccount) -> Workflow:
+        validate_saved_workflow(draft, account)
+        workflow = Workflow(id=uuid4().hex, languagePlugins=account.languagePlugins if account else None, **draft.model_dump())
+        storage.save_workflow(workflow, **owned(account))
         return workflow
 
     @app.get("/workflows/{workflow_id}", response_model_exclude_none=True)
-    def get_workflow(workflow_id: str) -> Workflow:
-        workflow = storage.get_workflow(workflow_id)
+    def get_workflow(workflow_id: str, account: OptionalAccount) -> Workflow:
+        workflow = storage.get_workflow(workflow_id, **owned(account))
         if workflow is None:
             raise ApiProblem(404, "workflow_not_found", "Workflow not found.")
         return workflow
 
     @app.put("/workflows/{workflow_id}", response_model_exclude_none=True)
-    def update_workflow(workflow_id: str, draft: WorkflowDraft) -> Workflow:
-        get_workflow(workflow_id)
-        validate_saved_workflow(draft)
-        workflow = Workflow(id=workflow_id, **draft.model_dump())
-        storage.save_workflow(workflow)
+    def update_workflow(workflow_id: str, draft: WorkflowDraft, account: OptionalAccount) -> Workflow:
+        existing = get_workflow(workflow_id, account)
+        owner = account if existing.languagePlugins is not None else None
+        validate_saved_workflow(draft, owner)
+        workflow = Workflow(id=workflow_id, languagePlugins=existing.languagePlugins, **draft.model_dump())
+        storage.save_workflow(workflow, **owned(owner))
         return workflow
 
     @app.post("/workflows/{workflow_id}/runs", status_code=202)
-    def start_run(workflow_id: str, request: RunRequest, tasks: BackgroundTasks) -> RunCreated:
-        workflow = get_workflow(workflow_id)
+    def start_run(workflow_id: str, request: RunRequest, tasks: BackgroundTasks, account: OptionalAccount) -> RunCreated:
+        workflow = get_workflow(workflow_id, account)
         plan = plan_run(workflow)
         model = None
         if any(node.type == "ai" for node in plan.nodes):
@@ -197,7 +257,8 @@ def create_app(dsn: str | None = None) -> FastAPI:
                 if request.modelId or error.code not in ("not_configured", "bad_config"):
                     raise llm_problem(error) from None
                 # no model configured on the server: scanners still run, the AI node reports the reason
-        archive = storage.get_source(request.sourceId)
+        owner = account if workflow.languagePlugins is not None else None
+        archive = storage.get_source(request.sourceId, **owned(owner))
         if archive is None:
             raise ApiProblem(404, "source_not_found", "Project source not found.")
         report = RunReport.for_workflow(workflow)
@@ -208,22 +269,23 @@ def create_app(dsn: str | None = None) -> FastAPI:
     @app.get("/workflows/{workflow_id}/runs")
     def list_runs(
         workflow_id: str,
+        account: OptionalAccount,
         limit: Annotated[int, Query(ge=1, le=100)] = 25,
         offset: Annotated[int, Query(ge=0)] = 0,
     ) -> list[RunListItem]:
-        get_workflow(workflow_id)
+        get_workflow(workflow_id, account)
         return storage.list_runs(workflow_id, limit, offset)
 
     @app.get("/runs/{run_id}", response_model_exclude_unset=True)
-    def get_run(run_id: str) -> RunReport:
-        report = storage.get_run(run_id)
+    def get_run(run_id: str, account: OptionalAccount) -> RunReport:
+        report = storage.get_run(run_id, **owned(account))
         if report is None:
             raise ApiProblem(404, "run_not_found", "Run not found.")
         return report
 
     @app.get("/runs/{run_id}/findings.json")
-    def download_findings(run_id: str) -> JSONResponse:
-        report = get_run(run_id)
+    def download_findings(run_id: str, account: OptionalAccount) -> JSONResponse:
+        report = get_run(run_id, account)
         if report.status not in ("succeeded", "failed"):
             raise ApiProblem(409, "run_in_progress", "Wait for the workflow to finish before exporting findings.")
         source_id = next(
@@ -231,15 +293,15 @@ def create_app(dsn: str | None = None) -> FastAPI:
              if result.output and isinstance(result.output.get("sourceId"), str)),
             None,
         )
-        archive = storage.get_source(source_id) if source_id and report.findings else None
+        archive = storage.get_source(source_id, **owned(account)) if source_id and report.findings else None
         return JSONResponse(
             export_findings(report.findings, archive),
             headers={"Content-Disposition": 'attachment; filename="findings.json"'},
         )
 
     @app.post("/runs/{run_id}/chat")
-    def chat_about_run(run_id: str, request: RunChatRequest) -> RunChatResponse:
-        report = get_run(run_id)
+    def chat_about_run(run_id: str, request: RunChatRequest, account: OptionalAccount) -> RunChatResponse:
+        report = get_run(run_id, account)
         if report.status not in ("succeeded", "failed"):
             raise ApiProblem(409, "run_in_progress", "Wait for the workflow to finish before asking a question.")
         model = fixed_model(request)  # pinned for this answer, whatever other tabs choose meanwhile

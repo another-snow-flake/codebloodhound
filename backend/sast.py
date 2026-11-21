@@ -1,10 +1,13 @@
 import itertools
 import re
+from collections.abc import Sequence
+from pathlib import PurePosixPath
 from collections.abc import Iterator
 from uuid import uuid4
 
 from .kotlin_text import without_comments
 from .schemas import Finding, Severity
+from .language_plugins import RULE_MESSAGES, active_suffixes, javascript_issues, python_issues
 from .sources import read_project_text
 
 
@@ -104,9 +107,9 @@ def kotlin_issues(code: str) -> Iterator[tuple[str, int]]:
                 break
 
 
-def find_kotlin_issues(data: bytes) -> list[Finding]:
+def find_kotlin_issues(data: bytes, scope: PurePosixPath | None = None) -> list[Finding]:
     findings = []
-    for path, content in read_project_text(data, lambda candidate: candidate.suffix.lower() == ".kt"):
+    for path, content in read_project_text(data, lambda candidate: candidate.suffix.lower() == ".kt", scope):
         code = without_comments(content)
         issues = {(rule, code.count("\n", 0, offset) + 1) for rule, offset in kotlin_issues(code)}
         for rule, line in sorted(issues, key=lambda item: (item[1], item[0])):
@@ -114,5 +117,20 @@ def find_kotlin_issues(data: bytes) -> list[Finding]:
             findings.append(Finding(
                 id=uuid4().hex, scanner="sast", ruleId=rule, file=path.as_posix(),
                 line=line, severity=severity, message=message,
+            ))
+    return findings
+
+
+def find_static_issues(data: bytes, scope: PurePosixPath | None = None, plugins: Sequence[str] = ()) -> list[Finding]:
+    findings = find_kotlin_issues(data, scope)
+    suffixes = active_suffixes(plugins)
+    if not suffixes:
+        return findings
+    for path, content in read_project_text(data, lambda candidate: candidate.suffix.lower() in suffixes, scope):
+        issues = python_issues(content) if path.suffix.lower() == ".py" else javascript_issues(content)
+        for rule, line in sorted(set(issues), key=lambda value: (value[1], value[0])):
+            findings.append(Finding(
+                id=uuid4().hex, scanner="sast", ruleId=rule, file=path.as_posix(),
+                line=line, severity="high", message=RULE_MESSAGES[rule],
             ))
     return findings

@@ -52,7 +52,11 @@
 
 Для полной проверки загрузите учебный архив организаторов со справочником `vulnerability-database/vulnerabilities.json`. Добавьте из каталога «Анализ зависимостей» (SCA) и «Статический анализ» (SAST) и соедините их с остальным графом. SCA берёт версии из Gradle, отдаёт приоритет `gradle.lockfile` и сверяет версии с офлайн-справочником Maven. Если вы загружаете только исходники, задайте путь к справочнику через `CYBER_GARDEN_ADVISORIES` перед запуском API. SAST проверяет Kotlin по базовым правилам для SQL, TLS, CORS и прав доступа. Находки SAST требуют проверки по контексту.
 
-Пока это одно общее рабочее пространство. На демо-сайте доступ контролирует прокси. Границы защиты описаны в [аудите безопасности](docs/security.md).
+Демо-сайт защищён прокси. Войдите или зарегистрируйтесь в редакторе, чтобы сохранять личные сценарии и управлять языковыми плагинами. Старые сценарии и сценарии, сохранённые без входа, остаются общими. [Границы защиты](docs/security.md)
+
+В окне аккаунта можно включить Python и JavaScript/TypeScript. Сценарий получает плагины своего владельца при открытии и запуске, в том числе по расписанию. Плагины расширяют поиск секретов и SAST. SCA по-прежнему сверяет зависимости Gradle со справочником Maven.
+
+У поиска секретов, SCA и SAST два входа. Основной вход подключайте к потоку сценария, а необязательный вход «Источник» — к ноде с относительным путём файла или папки внутри ZIP. Одну ноду «Источник» можно подключить к нескольким сканерам. Без связи на этом входе сканер проверяет весь архив. Если указанный путь отсутствует, нода источника покажет ошибку, а связанные сканеры пропустят запуск.
 
 Для загрузки по ссылке задайте перед запуском API `CYBER_GARDEN_REPOSITORIES` — список разрешённых публичных учебных репозиториев через запятую в формате `владелец/репозиторий`. В редакторе вставьте `https://github.com/владелец/репозиторий` и нажмите «Загрузить по ссылке». Загружается ZIP ветки по умолчанию, к нему применяются те же ограничения, что и к ручной загрузке. Для SCA по репозиторию без справочника задайте `CYBER_GARDEN_ADVISORIES` на сервере.
 
@@ -126,7 +130,7 @@ To call the API directly, use the [requests and sample graph](#workflow-api). To
 
 For a full scan, upload the organizers' training archive with `vulnerability-database/vulnerabilities.json`. Add **Анализ зависимостей** (SCA) and **Статический анализ** (SAST) from the catalog and connect them to the graph. SCA reads Gradle dependency versions, prefers `gradle.lockfile`, and checks versions against the offline Maven catalog. For a ZIP with source files only, set `CYBER_GARDEN_ADVISORIES` to the catalog path before starting the API. SAST checks Kotlin with basic rules for SQL, TLS, CORS and authorization. Review SAST findings in context.
 
-The prototype uses one shared workspace. The demo proxy controls access. See the [security audit](docs/security.md) for details.
+The demo proxy protects access. Signed-in users have private workflows and archives, while older and guest workflows remain shared. The owner's Python and JavaScript/TypeScript plugins extend secret detection and SAST for both manual and scheduled runs. An optional source input limits a scanner to a file or folder inside the ZIP. [Security audit](docs/security.md)
 
 To import by URL, configure `CYBER_GARDEN_REPOSITORIES` before starting the API with a comma-separated list of approved public training repositories in `owner/repo` format. Enter `https://github.com/owner/repo` in the editor. The default branch ZIP is subject to the same limits as a manual upload. Set `CYBER_GARDEN_ADVISORIES` for repositories without an SCA catalog.
 

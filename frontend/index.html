@@ -24,6 +24,7 @@
     </div>
   </div>
   <button class="btn" id="libBtn" aria-controls="left" aria-expanded="false">Библиотека</button>
+  <button class="btn" id="accountBtn">Войти</button>
   <input id="wfName" class="btn" aria-label="Название сценария" value="Проверка секретов">
   <span class="sp"></span>
   <span class="tag" id="apiTag">проверяю связь…</span>
@@ -117,6 +118,25 @@
   <label class="f" for="cnNote">Заметка (необязательно)</label><textarea class="note-in" id="cnNote" maxlength="1000" placeholder="Что проверить на этом шаге"></textarea>
   <label class="chk note"><input type="checkbox" id="cnSave" checked> Добавить ноду в библиотеку для повторного использования</label>
   <div class="row"><button class="btn" data-close>Отмена</button><button class="btn pri" id="cnCreate">Добавить на холст</button></div>
+</div></div>
+<div class="ov" id="ovAccount"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
+  <h2 id="accountTitle">Аккаунт</h2>
+  <form id="accountForm">
+    <label class="f" for="accountUsername">Имя пользователя</label>
+    <input id="accountUsername" type="text" autocomplete="username" required minlength="3" maxlength="40">
+    <label class="f" for="accountPassword">Пароль</label>
+    <input id="accountPassword" type="password" autocomplete="current-password" required minlength="10" maxlength="128">
+    <p class="note">Вход открывает новое рабочее пространство. Текущий сценарий можно сохранить перед переключением.</p>
+    <div class="row account-actions"><button type="button" class="btn" data-close>Закрыть</button><button type="submit" class="btn" value="register">Регистрация</button><button type="submit" class="btn pri" value="login">Войти</button></div>
+  </form>
+  <form id="pluginsForm" hidden>
+    <p class="note" id="accountName"></p>
+    <p class="note">Выбор применяется к новым запускам сценариев этого аккаунта. Плагины добавляют поиск секретов и SAST.</p>
+    <label class="chk note"><input type="checkbox" name="plugin" value="python"> Python</label>
+    <label class="chk note"><input type="checkbox" name="plugin" value="javascript"> JavaScript и TypeScript</label>
+    <div class="row account-actions"><button type="button" class="btn" id="logoutBtn">Выйти</button><button type="button" class="btn" data-close>Закрыть</button><button type="submit" class="btn pri">Сохранить плагины</button></div>
+  </form>
+  <p class="note" id="accountStatus" aria-live="polite"></p>
 </div></div>
 <div class="ov" id="ovHistory"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
   <h2 id="historyTitle">История запусков</h2>

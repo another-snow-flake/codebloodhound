@@ -1,28 +1,11 @@
 import io
 from pathlib import PurePosixPath
-from posixpath import commonpath
 from zipfile import ZipFile
 
 from pydantic import JsonValue
 
 from .schemas import Finding
-from .sources import find_secrets
-
-
-GRADLE_FILES = {"settings.gradle.kts", "settings.gradle", "build.gradle.kts", "build.gradle", "gradle.lockfile"}
-
-
-def project_root(paths: list[PurePosixPath], finding_paths: list[PurePosixPath]) -> PurePosixPath:
-    gradle_roots = {path.parent for path in paths if path.name in GRADLE_FILES}
-    source_roots = {
-        PurePosixPath(*path.parts[:path.parts.index("src")])
-        for path in finding_paths if "src" in path.parent.parts
-    }
-    roots = gradle_roots or source_roots
-    if not roots:
-        return PurePosixPath()
-    # Keep paths valid for multi-module archives and findings outside a detected Gradle root.
-    return PurePosixPath(commonpath([*map(str, roots), *(str(path.parent) for path in finding_paths)]))
+from .sources import find_secrets, project_root
 
 
 def export_findings(findings: list[Finding], archive: bytes | None) -> dict[str, list[dict[str, JsonValue]]]:

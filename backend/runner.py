@@ -2,22 +2,23 @@ import re
 from collections.abc import Callable
 from graphlib import CycleError, TopologicalSorter
 from itertools import islice
+from pathlib import PurePosixPath
 from typing import NamedTuple
 
 from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities, template_analysis
 from .conditions import evaluate_condition, validate_condition
 from .llm import LlmError, ModelSpec, client_for, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
-from .sast import find_kotlin_issues
+from .sast import find_static_issues
 from .schedule import daily_schedule
 from .schemas import AiAnalysis, ApiProblem, Edge, Finding, Node, NodeTransfer, RunReport, WorkflowDraft
-from .sources import find_secrets
+from .sources import archive_scope, find_secrets, validate_scope
 from .storage import Storage
 from .webhooks import WEBHOOK_REF, WebhookError, send_webhook
 
 
-SCANNERS = {"secrets": find_secrets, "sca": find_vulnerable_dependencies, "sast": find_kotlin_issues}
-SUPPORTED_NODES = {"trigger", "condition", "ai", "notify", "custom", *SCANNERS}
+SCANNERS = {"secrets": find_secrets, "sca": find_vulnerable_dependencies, "sast": find_static_issues}
+SUPPORTED_NODES = {"trigger", "source", "condition", "ai", "notify", "custom", *SCANNERS}
 MAX_PORTS = 4
 MAX_NOTE = 1000
 COLOR = re.compile(r"#[0-9a-fA-F]{6}")
@@ -35,6 +36,8 @@ def validate_node_config(node: Node) -> None:
         raise ApiProblem(422, "invalid_node_config", f"A node note must be text up to {MAX_NOTE} characters.")
     if node.type == "condition":
         validate_condition(node.config)
+    if node.type == "source":
+        validate_scope(node.config.get("path"))
     if node.type != "custom":
         return
     title, color = node.config.get("title"), node.config.get("color")
@@ -59,6 +62,10 @@ def output_handles(node: Node) -> set[str | None]:
 
 
 def input_handles(node: Node) -> set[str | None]:
+    if node.type in SCANNERS:
+        return {None, "source"}
+    if node.type == "source":
+        return set()
     if node.type == "custom":
         count = _port_count(node, "inputs")
         return {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
@@ -73,6 +80,7 @@ class ExecutionPlan(NamedTuple):
 class NodeContext(NamedTuple):
     findings: dict[str, Finding]
     analyses: dict[str, AiAnalysis]
+    source_path: PurePosixPath | None = None
 
     def transfer(self, port: str | None, node_id: str | None = None) -> NodeTransfer:
         return NodeTransfer(
@@ -82,6 +90,7 @@ class NodeContext(NamedTuple):
             analysisCount=len(self.analyses),
             findingIds=list(islice(self.findings, TRANSFER_PREVIEW_SIZE)),
             analysisNodeIds=list(islice(self.analyses, TRANSFER_PREVIEW_SIZE)),
+            sourcePath=self.source_path.as_posix() if self.source_path is not None else None,
         )
 
 
@@ -102,12 +111,16 @@ def validate_edges(workflow: WorkflowDraft) -> dict[str, list[Edge]]:
         if edge.source not in nodes or edge.target not in nodes:
             raise ApiProblem(422, "invalid_workflow", "Every edge must connect existing nodes.")
         source = nodes[edge.source]
+        if (source.type == "source") != (edge.targetHandle == "source"):
+            raise ApiProblem(422, "invalid_scan_source_edge", "Connect a source node only to a scanner's source input.")
         if source.type == "condition" and edge.sourceHandle not in ("true", "false"):
             raise ApiProblem(422, "invalid_workflow", "Only condition edges require a true or false sourceHandle.")
         if edge.sourceHandle not in output_handles(source):
             raise ApiProblem(422, "invalid_workflow", "An edge leaves through a port its source node does not have.")
         if edge.targetHandle not in input_handles(nodes[edge.target]):
             raise ApiProblem(422, "invalid_workflow", "An edge enters through a port its target node does not have.")
+        if edge.targetHandle == "source" and any(item.targetHandle == "source" for item in incoming[edge.target]):
+            raise ApiProblem(422, "invalid_scan_source_edge", "A scanner accepts only one source node.")
         incoming[edge.target].append(edge)
     return incoming
 
@@ -130,7 +143,10 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
     except CycleError as error:
         raise ApiProblem(422, "invalid_workflow", "A workflow cannot contain cycles.") from error
 
-    if any(not incoming[node.id] for node in ordered if node.type != "trigger"):
+    if any(
+        not any(edge.targetHandle != "source" for edge in incoming[node.id])
+        for node in ordered if node.type not in ("trigger", "source")
+    ):
         raise ApiProblem(422, "invalid_workflow", "Every node must be reachable from the trigger.")
     for node in ordered:
         if node.type not in SUPPORTED_NODES:
@@ -237,7 +253,10 @@ def execute_plan(
         ]
         result.inputs = [context.transfer(edge.targetHandle, edge.source) for edge, context in active_inputs]
         result.outputs = []
-        if node.type != "trigger" and not active_inputs:
+        flow_inputs = [context for edge, context in active_inputs if edge.targetHandle != "source"]
+        scope_input = next((context for edge, context in active_inputs if edge.targetHandle == "source"), None)
+        requires_source = any(edge.targetHandle == "source" for edge in plan.incoming[node.id])
+        if node.type not in ("trigger", "source") and (not flow_inputs or (requires_source and scope_input is None)):
             result.status = "skipped"
             storage.save_run(report)
             continue
@@ -245,18 +264,28 @@ def execute_plan(
         result.status = "running"
         storage.save_run(report)
         context = NodeContext(
-            {key: finding for _, item in active_inputs for key, finding in item.findings.items()},
-            {key: analysis for _, item in active_inputs for key, analysis in item.analyses.items()},
+            {key: finding for item in flow_inputs for key, finding in item.findings.items()},
+            {key: analysis for item in flow_inputs for key, analysis in item.analyses.items()},
         )
         handle = None
         try:
             if node.type == "trigger":
                 result.output = {"sourceId": source_id}
+            elif node.type == "source":
+                path = archive_scope(archive, node.config["path"])
+                context = NodeContext({}, {}, path)
+                result.output = {"sourcePath": path.as_posix()}
             elif node.type in SCANNERS:
-                findings = SCANNERS[node.type](archive)
+                path = scope_input.source_path if scope_input is not None else None
+                if node.type == "sca":
+                    findings = find_vulnerable_dependencies(archive, path)
+                else:
+                    findings = SCANNERS[node.type](archive, path, report.languagePlugins or ())
                 report.findings.extend(findings)
                 context.findings.update((finding.id, finding) for finding in findings)
                 result.output = {"findings": [finding.model_dump(mode="json", exclude_unset=True) for finding in findings]}
+                if path is not None:
+                    result.output["sourcePath"] = path.as_posix()
             elif node.type == "condition":
                 result.output = evaluate_condition(node.config, context.findings.values())
                 handle = "true" if result.output["matched"] else "false"
@@ -301,6 +330,10 @@ def execute_plan(
         except CatalogUnavailable as error:
             result.status = "failed"
             result.error = str(error)
+        except ApiProblem as error:
+            result.status = "failed"
+            result.error = str(error)
+            result.output = {"errorCode": error.code}
         except Exception:
             result.status = "failed"
             result.error = "Node execution failed."

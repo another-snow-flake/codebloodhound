@@ -11,7 +11,7 @@ from pydantic import BaseModel, BeforeValidator, Field, StrictBool, StringConstr
 
 from .kotlin_text import without_comments
 from .schemas import Finding, Severity
-from .sources import read_project_text
+from .sources import in_scope, read_project_text
 
 
 MAX_CATALOG_BYTES = 4 * 1024 * 1024
@@ -172,7 +172,12 @@ def gradle_dependencies(data: bytes) -> list[Dependency]:
     return dependencies
 
 
-def find_vulnerable_dependencies(data: bytes) -> list[Finding]:
+def find_vulnerable_dependencies(data: bytes, scope: PurePosixPath | None = None) -> list[Finding]:
+    dependencies = gradle_dependencies(data) if scope is not None else None
+    if dependencies is not None:
+        dependencies = [dep for dep in dependencies if in_scope(dep.path, scope)]
+        if not dependencies:
+            return []
     catalog = load_catalog(data)
     advisories = defaultdict(list)
     for advisory in catalog.vulnerabilities:
@@ -180,7 +185,7 @@ def find_vulnerable_dependencies(data: bytes) -> list[Finding]:
 
     findings = []
     seen = set()
-    for dep in gradle_dependencies(data):
+    for dep in dependencies if dependencies is not None else gradle_dependencies(data):
         version = version_key(dep.version)
         for advisory in advisories[dep.group, dep.artifact]:
             key = dep.path, dep.group, dep.artifact, dep.version, advisory.id

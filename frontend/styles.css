@@ -94,6 +94,7 @@ svg.edges text{font-size:11px;fill:var(--mute)}
 .h{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--card);border:2px solid var(--mute);cursor:crosshair}
 .h:hover{border-color:var(--acc);background:var(--acc)}
 .h.in{left:-8px;top:29px}.h.out{right:-8px;top:29px}
+.h.in.scope-port{border-color:#16767c}
 .h.t{right:-8px;top:17px;border-color:var(--ok)}.h.f{right:-8px;top:43px;border-color:var(--bad)}
 .insp{position:absolute;top:12px;right:12px;width:268px;max-height:calc(100% - 24px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .insp h3,.ph h3{margin:0 0 8px;font-size:14px}
@@ -177,6 +178,7 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 #generateWarnings:empty{display:none}
 #generateWarnings{padding-left:20px}
 #ovGenerate .generate-actions{flex-wrap:wrap}
+#ovAccount .account-actions{flex-wrap:wrap}
 .modal textarea{width:100%;height:280px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
 .toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;z-index:60;display:none;max-width:90vw}
 .chk{display:flex;gap:8px;align-items:center;margin-top:10px}

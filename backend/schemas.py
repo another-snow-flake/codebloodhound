@@ -6,11 +6,12 @@ from pydantic import BaseModel, Field, JsonValue, StringConstraints
 
 
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=100)]
-NodeType = Literal["trigger", "secrets", "sca", "sast", "condition", "ai", "notify", "custom"]
+NodeType = Literal["trigger", "source", "secrets", "sca", "sast", "condition", "ai", "notify", "custom"]
+LanguagePlugin = Literal["python", "javascript"]
 # condition edges leave through "true"/"false"; a custom node with several outputs or inputs
 # names the port: "out1".."out4", "in1".."in4"
 SourceHandle = Annotated[str, StringConstraints(pattern=r"^(?:true|false|out[1-4])$")]
-TargetHandle = Annotated[str, StringConstraints(pattern=r"^in[1-4]$")]
+TargetHandle = Annotated[str, StringConstraints(pattern=r"^(?:in[1-4]|source)$")]
 RunStatus = Literal["queued", "running", "succeeded", "failed"]
 TriggerMode = Literal["manual", "daily"]
 NodeStatus = Literal["queued", "running", "succeeded", "failed", "skipped"]
@@ -45,6 +46,7 @@ class WorkflowDraft(BaseModel):
 
 class Workflow(WorkflowDraft):
     id: Identifier
+    languagePlugins: list[LanguagePlugin] | None = None
 
 
 class NodeTemplateDraft(BaseModel):
@@ -182,6 +184,7 @@ class NodeTransfer(BaseModel):
     analysisCount: int
     findingIds: list[Identifier]
     analysisNodeIds: list[Identifier]
+    sourcePath: str | None = None
 
 
 class NodeResult(BaseModel):
@@ -205,6 +208,7 @@ class RunReport(BaseModel):
     nodes: list[NodeResult]
     findings: list[Finding] = Field(default_factory=list)
     aiAnalysis: AiAnalysis | None = None
+    languagePlugins: list[LanguagePlugin] | None = None
 
     @classmethod
     def for_workflow(cls, workflow: Workflow, scheduled_for: datetime | None = None) -> "RunReport":
@@ -214,6 +218,7 @@ class RunReport(BaseModel):
             createdAt=datetime.now(timezone.utc),
             scheduledFor=scheduled_for,
             triggerMode="daily" if scheduled_for is not None else "manual",
+            languagePlugins=workflow.languagePlugins,
             status="queued",
             nodes=[
                 NodeResult(

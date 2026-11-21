@@ -89,3 +89,17 @@ class WorkflowGeneratorTest(unittest.TestCase):
         response = self.generate()
         self.assertEqual((response.status_code, response.json()["code"]), (422, "unsupported_generation"))
         self.model.complete.assert_called_once()
+
+    def test_scoped_description_creates_a_source_edge_for_each_scanner(self):
+        self.model.complete.return_value = json.dumps({
+            "name": "Draft", "scanners": ["secrets", "sast"], "scanPath": "src/main",
+        })
+        response = self.generate(description="Проверь секреты и SAST только в папке src/main учебного ZIP.")
+        self.assertEqual(response.status_code, 200)
+        draft = WorkflowDraft.model_validate(response.json()["draft"])
+        source, = (node for node in draft.nodes if node.type == "source")
+        self.assertEqual(source.config, {"path": "src/main"})
+        scopes = [edge for edge in draft.edges if edge.targetHandle == "source"]
+        self.assertEqual(len(scopes), 2)
+        self.assertTrue(all(edge.source == source.id for edge in scopes))
+        plan_run(draft)

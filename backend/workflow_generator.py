@@ -44,6 +44,7 @@ class GeneratedIntent(BaseModel):
     notification: Literal["always", "match", "no_match"] | None = None
     scheduleTime: str | None = Field(default=None, pattern=f"^{DAILY_TIME.pattern}$")
     scheduleTimezone: str | None = Field(default=None, min_length=1, max_length=100)
+    scanPath: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 SYSTEM_PROMPT = """Создай черновик защитной проверки учебного ZIP для CodeBloodhound по описанию.
@@ -62,6 +63,7 @@ SYSTEM_PROMPT = """Создай черновик защитной проверк
   Условие обязательно для match и no_match. Получателя пользователь выбирает вручную.
 - scheduleTime: null для ручного запуска или HH:MM для ежедневного запуска.
 - scheduleTimezone: null для часового пояса редактора или имя IANA, только если пользователь указал пояс.
+- scanPath: null для целого проекта либо один относительный путь в ZIP, если его явно указали для всех сканеров.
 AI-рекомендации, если нужны, ставятся после сканеров и перед условием.
 Если запрос не про защитную проверку учебного проекта или его смысл зависит
 от неподдерживаемой операции или периодичности, верни {"unsupported":true}.
@@ -91,7 +93,7 @@ def _build_draft(intent: GeneratedIntent, timezone: str) -> GenerationResult:
     draft = WorkflowDraft(name=intent.name, nodes=[trigger], edges=[])
 
     def append(
-        kind: NodeType, source: Node, config: dict[str, JsonValue] | None = None, handle: SourceHandle | None = None,
+        kind: NodeType, source: Node | None, config: dict[str, JsonValue] | None = None, handle: SourceHandle | None = None,
     ) -> Node:
         index = len(draft.nodes)
         node = Node(
@@ -99,12 +101,20 @@ def _build_draft(intent: GeneratedIntent, timezone: str) -> GenerationResult:
             position=Position(x=40 + index % 3 * 240, y=70 + index // 3 * 145),
         )
         draft.nodes.append(node)
-        draft.edges.append(Edge(id=f"e{index}", source=source.id, target=node.id, sourceHandle=handle))
+        if source is not None:
+            draft.edges.append(Edge(id=f"e{index}", source=source.id, target=node.id, sourceHandle=handle))
         return node
 
     end = trigger
     for scanner in intent.scanners:
         end = append(scanner, end)
+    if intent.scanPath is not None:
+        scopes = [node for node in draft.nodes if node.type in intent.scanners]
+        source_node = append("source", None, {"path": intent.scanPath})
+        draft.edges.extend(
+            Edge(id=f"scope-{node.id}", source=source_node.id, target=node.id, targetHandle="source")
+            for node in scopes
+        )
     if intent.explain:
         end = append("ai", end)
     if intent.condition is not None:
