@@ -25,6 +25,7 @@ from .schemas import (
 from .sources import MAX_UPLOAD, validate_zip
 from .storage import Storage, database_url
 from .webhooks import WebhookError, configured_webhooks
+from .workflow_generator import GenerationResult, WorkflowGenerationRequest, generate_workflow
 
 
 LLM_ERROR_STATUS = {
@@ -144,6 +145,14 @@ def create_app(dsn: str | None = None) -> FastAPI:
     @app.get("/workflows", response_model_exclude_none=True)
     def list_workflows() -> list[Workflow]:
         return storage.list_workflows()
+
+    @app.post("/workflows/generate", response_model_exclude_none=True)
+    def generate_workflow_draft(request: WorkflowGenerationRequest) -> GenerationResult:
+        model = fixed_model(request)
+        try:
+            return generate_workflow(request, client_for(model))
+        except LlmError as error:
+            raise llm_problem(error) from None
 
     def validate_saved_workflow(draft: WorkflowDraft):
         schedule = daily_schedule(draft)

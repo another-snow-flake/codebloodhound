@@ -172,6 +172,11 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(460px,100%);max-height:90vh;overflow:auto}
 .modal h2{margin:0 0 4px;font-size:18px}
 .modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+#ovGenerate .generate-prompt{height:112px}
+#generatePreview{margin-top:12px}
+#generateWarnings:empty{display:none}
+#generateWarnings{padding-left:20px}
+#ovGenerate .generate-actions{flex-wrap:wrap}
 .modal textarea{width:100%;height:280px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
 .toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;z-index:60;display:none;max-width:90vw}
 .chk{display:flex;gap:8px;align-items:center;margin-top:10px}

@@ -17,6 +17,7 @@
     <button class="btn" id="fileBtn" aria-haspopup="true">Файл</button>
     <div class="dd">
       <button data-a="new">Новый сценарий</button>
+      <button data-a="generate">Сгенерировать с AI</button>
       <button data-a="save">Сохранить</button>
       <button data-a="zip">Загрузка .zip</button>
       <button data-a="dl">Экспорт (JSON)</button>
@@ -88,6 +89,25 @@
   <textarea id="jsonOut" readonly></textarea>
   <div class="row"><button class="btn" id="jsonCopy">Копировать</button><button class="btn pri" id="jsonDownload">Скачать</button><button class="btn" data-close>Закрыть</button></div>
 </div></div>
+<div class="ov" id="ovGenerate"><form class="modal" id="generateForm" role="dialog" aria-modal="true" aria-labelledby="generateTitle">
+  <h2 id="generateTitle">Сценарий по описанию</h2>
+  <label class="f" for="generatePrompt">Что нужно проверять?</label>
+  <textarea class="note-in generate-prompt" id="generatePrompt" required maxlength="2000" placeholder="Каждый день в 14:00 ищи секреты и отправляй уведомление, если есть находки высокой критичности."></textarea>
+  <p class="note">Модели передаётся описание. Используйте учебные данные без токенов и паролей.</p>
+  <label class="chk note" id="generateConsentRow" hidden><input type="checkbox" id="generateConsent"> Разрешаю отправить описание в DeepSeek.</label>
+  <p class="note" id="generateStatus" aria-live="polite"></p>
+  <div id="generatePreview" hidden>
+    <strong id="generateName"></strong>
+    <p class="note" id="generateNodes"></p>
+    <ul class="note" id="generateWarnings"></ul>
+    <p class="note">Черновик заменит текущий граф на холсте. Чтобы сохранить текущие правки, сначала закройте окно и сохраните сценарий.</p>
+  </div>
+  <div class="row generate-actions">
+    <button type="button" class="btn" data-close>Закрыть</button>
+    <button type="submit" class="btn pri" id="generateRun">Сгенерировать</button>
+    <button type="button" class="btn" id="generateApply" hidden>Открыть черновик</button>
+  </div>
+</form></div>
 <div class="ov" id="ovNode"><div class="modal">
   <h2>Своя нода</h2><p class="note">Своя нода передаёт находки со входов на все выходы. Её удобно использовать как шаг ручной проверки, комментарий или развилку.</p>
   <label class="f" for="cnTitle">Название</label><input type="text" id="cnTitle" maxlength="40" placeholder="Например, «Ревью тимлида»">

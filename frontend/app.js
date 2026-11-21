@@ -356,6 +356,7 @@ $("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("o
 addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
 $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a;
   if(running&&a!=="dl")return toast("Дождитесь завершения проверки");
+  if(a==="generate")return openGenerator();
   if(a==="new"){wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()}
   if(a==="dl"){const{id,...d}=wf;d.name=$("#wfName").value;$("#jsonOut").value=JSON.stringify(d,null,2);$("#ovJson").classList.add("open")}
   if(a==="save"){try{await save();toast("Сценарий сохранён");if(tab==="my")left()}catch(e){fail(e)}}});
@@ -367,6 +368,85 @@ function downloadJson(filename,text){
 }
 $("#jsonDownload").onclick=()=>downloadJson("workflow.json",$("#jsonOut").value);
 document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>b.closest(".ov").classList.remove("open"));
+// Генерация создаёт отдельный черновик и меняет граф только по кнопке «Открыть».
+let generation=null;
+function resetGenerationPreview(){
+  $("#generatePreview").hidden=true;
+  $("#generateApply").hidden=true;
+  generation.draft=null
+}
+function openGenerator(){
+  generation={pending:false,draft:null};
+  $("#generateStatus").textContent="";
+  $("#generateConsent").checked=false;
+  $("#generateConsentRow").hidden=!activeModel()?.startsWith("deepseek:");
+  $("#generateRun").disabled=false;
+  $("#generatePrompt").disabled=false;
+  resetGenerationPreview();
+  $("#ovGenerate").classList.add("open");
+  $("#generatePrompt").focus()
+}
+$("#generatePrompt").oninput=()=>{
+  if(generation?.draft){
+    resetGenerationPreview();
+    $("#generateStatus").textContent=""
+  }
+};
+$("#generateForm").onsubmit=async event=>{
+  event.preventDefault();
+  const current=generation,description=$("#generatePrompt").value.trim(),status=$("#generateStatus");
+  if(!current||current.pending||!description)return;
+  const allowExternal=$("#generateConsent").checked,modelId=activeModel();
+  if(!$("#generateConsentRow").hidden&&!allowExternal){
+    status.textContent="Подтвердите отправку описания в DeepSeek.";
+    return
+  }
+  resetGenerationPreview();
+  current.pending=true;
+  $("#generateRun").disabled=true;$("#generatePrompt").disabled=true;
+  status.textContent="Генерируем черновик…";
+  try{
+    const result=await api("/workflows/generate",{method:"POST",headers:JH,body:JSON.stringify({
+      description,modelId,allowExternal,timezone:TRIGGER_DEFAULTS.scheduleTimezone
+    })});
+    if(generation!==current||!$("#ovGenerate").classList.contains("open"))return;
+    current.draft=result.draft;
+    $("#generateName").textContent=result.draft.name;
+    $("#generateNodes").textContent=result.draft.nodes.map(nodeName).join(" · ");
+    const warnings=$("#generateWarnings");
+    warnings.replaceChildren();
+    if(result.needsSource){
+      const trigger=result.draft.nodes.find(n=>n.type==="trigger");
+      const item=document.createElement("li");
+      item.textContent=`Запуск ежедневно в ${trigger.config.scheduleTime} (${trigger.config.scheduleTimezone}). Закрепите загруженный проект в ноде «Запуск».`;
+      warnings.append(item)
+    }
+    if(result.needsRecipient){
+      const item=document.createElement("li");
+      item.textContent="Выберите получателя в ноде «Уведомление».";
+      warnings.append(item)
+    }
+    $("#generatePreview").hidden=false;$("#generateApply").hidden=false;
+    status.textContent="Черновик готов."
+  }catch(error){
+    if(generation!==current||!$("#ovGenerate").classList.contains("open"))return;
+    if(error.code==="consent_required")$("#generateConsentRow").hidden=false;
+    status.textContent=({
+      consent_required:"Подтвердите отправку описания в DeepSeek.",
+      unsupported_generation:"Опишите проверку учебного проекта. Доступны поиск секретов, SCA и SAST, ручной и ежедневный запуск.",
+      invalid_response:"Модель не смогла составить корректный сценарий. Уточните описание и повторите."
+    })[error.code]||LLM_ERRORS[error.code]||error.message
+  }finally{
+    current.pending=false;
+    if(generation===current){$("#generateRun").disabled=false;$("#generatePrompt").disabled=false}
+  }
+};
+$("#generateApply").onclick=()=>{
+  if(running||!generation?.draft)return;
+  wf={...generation.draft,id:""};
+  $("#wfName").value=wf.name;sel=null;focusCanvas();clearReport();
+  $("#ovGenerate").classList.remove("open")
+};
 // связь с бэкендом и настройки
 async function loadWebhookRefs(){
   const origin=API;
@@ -777,6 +857,6 @@ init();left();render();renderRep();renderAI();ping().then(ok=>ok&&loadLlm());
   $("#libBtn").onclick=lib;$("#libTab").onclick=lib;
   $("#chatFab").onclick=()=>{main.classList.add("ai-open");$("#chatIn").focus()};
   document.querySelector('[data-a="zip"]').addEventListener("click",()=>{if(!running)$("#fileIn").click()});
-  ["ovSet","ovJson","ovHistory"].forEach(id=>{const o=$("#"+id);o.addEventListener("pointerdown",e=>{if(e.target===o)o.classList.remove("open")})});
+  ["ovSet","ovJson","ovHistory","ovGenerate"].forEach(id=>{const o=$("#"+id);o.addEventListener("pointerdown",e=>{if(e.target===o)o.classList.remove("open")})});
   addEventListener("keydown",e=>{if(e.key==="Escape")document.querySelectorAll(".ov.open").forEach(o=>o.classList.remove("open"))});
 })();
