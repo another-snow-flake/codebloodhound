@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, JsonValue, StringConstraints
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=100)]
 NodeType = Literal["trigger", "source", "secrets", "sca", "sast", "condition", "ai", "notify", "custom"]
 LanguagePlugin = Literal["python", "javascript"]
+CUSTOM_NODE_CONFIG_KEYS = frozenset({"title", "color", "inputs", "outputs", "scanner", "language", "note"})
 # condition edges leave through "true"/"false"; a custom node with several outputs or inputs
 # names the port: "out1".."out4", "in1".."in4"
 SourceHandle = Annotated[str, StringConstraints(pattern=r"^(?:true|false|out[1-4])$")]

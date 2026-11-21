@@ -4,13 +4,16 @@ from contextlib import asynccontextmanager, suppress
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
-from .accounts import Account, Credentials, PluginSelection, SESSION_HEADER, Session, password_hash, token_digest, verify_password
+from .accounts import (
+    Account, Credentials, PluginSelection, RegistrationCredentials, SESSION_HEADER, Session,
+    password_hash, token_digest, verify_password,
+)
 from .ai import answer_report_question
 from .exports import export_findings
 from .llm import LlmError, ModelSpec, check_model, client_for, default_model_id, list_model_options, resolve_model
@@ -19,15 +22,17 @@ from .runner import execute_plan, plan_run, validate_edges, validate_node_config
 from .schedule import daily_schedule
 from .scheduler import poll_schedules
 from .schemas import (
-    ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, Node,
+    CUSTOM_NODE_CONFIG_KEYS, ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, Node,
     NodeTemplate, NodeTemplateDraft, Position, RepositorySourceRequest,
     RunChatRequest, RunChatResponse, RunCreated,
     RunListItem, RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
 )
 from .sources import MAX_UPLOAD, validate_zip
 from .storage import Storage, database_url
+from .user_plugins import PluginDraft, UserPlugin
 from .webhooks import WebhookError, configured_webhooks
 from .workflow_generator import GenerationResult, WorkflowGenerationRequest, generate_workflow
+from .workflow_templates import PublicTemplate, PublishTemplate, TemplateSummary, make_public_draft
 
 
 LLM_ERROR_STATUS = {
@@ -126,10 +131,14 @@ def create_app(dsn: str | None = None) -> FastAPI:
         return Session(token=token, account=account)
 
     @app.post("/accounts/register", status_code=201)
-    def register(credentials: Credentials) -> Session:
-        account = Account(id=uuid4().hex, username=credentials.username.lower(), languagePlugins=[])
+    def register(credentials: RegistrationCredentials) -> Session:
+        if credentials.password != credentials.confirmPassword:
+            raise ApiProblem(422, "password_mismatch", "Passwords must match.")
+        account = Account(
+            id=uuid4().hex, username=credentials.username.lower(), email=credentials.email, languagePlugins=[],
+        )
         if not storage.create_account(account, password_hash(credentials.password)):
-            raise ApiProblem(409, "username_taken", "The username is already in use.")
+            raise ApiProblem(409, "registration_conflict", "The username or email is already in use.")
         return issue_session(account)
 
     @app.post("/accounts/login")
@@ -188,6 +197,8 @@ def create_app(dsn: str | None = None) -> FastAPI:
     def create_node_template(draft: NodeTemplateDraft) -> NodeTemplate:
         if draft.type == "trigger":
             raise ApiProblem(422, "invalid_node_template", "A workflow has one trigger; it cannot be saved as a template.")
+        if draft.config.get("privatePluginOwner"):
+            raise ApiProblem(422, "private_plugin_in_workflow", "A private plugin node cannot be saved to the shared catalog.")
         validate_node_config(Node(id="template", type=draft.type, position=Position(x=0, y=0), config=draft.config))
         if storage.count_node_templates() >= MAX_NODE_TEMPLATES:
             raise ApiProblem(409, "too_many_node_templates", f"The library holds up to {MAX_NODE_TEMPLATES} saved nodes.")
@@ -200,6 +211,47 @@ def create_app(dsn: str | None = None) -> FastAPI:
         # POST instead of DELETE: the demo proxy and CORS allow only GET, POST and PUT
         if not storage.delete_node_template(template_id):
             raise ApiProblem(404, "node_template_not_found", "Saved node not found.")
+
+    @app.get("/plugins")
+    def list_plugins(
+        account: OptionalAccount, response: Response,
+        q: Annotated[str, Query(max_length=100, pattern=r"^[^\x00]*$")] = "",
+        limit: Annotated[int, Query(ge=1, le=50)] = 24,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> list[UserPlugin]:
+        response.headers["Cache-Control"] = "no-store"
+        return storage.list_plugins(account.id if account else None, q.strip(), limit, offset)
+
+    @app.get("/plugins/{plugin_id}")
+    def get_plugin(plugin_id: str, account: OptionalAccount, response: Response) -> UserPlugin:
+        response.headers["Cache-Control"] = "no-store"
+        plugin = storage.get_plugin(plugin_id, account.id if account else None)
+        if plugin is None:
+            raise ApiProblem(404, "plugin_not_found", "Plugin not found.")
+        return plugin
+
+    def save_plugin(plugin_id: str, draft: PluginDraft, account: Account, *, create: bool) -> UserPlugin:
+        if (draft.config.keys() - CUSTOM_NODE_CONFIG_KEYS
+                or any(isinstance(value, str) and "\x00" in value for value in draft.config.values())):
+            raise ApiProblem(422, "invalid_node_config", "Unsupported custom node configuration.")
+        validate_node_config(Node(id="plugin", type="custom", position=Position(x=0, y=0), config=draft.config))
+        plugin = storage.save_plugin(plugin_id, account, draft, create=create)
+        if plugin is None:
+            raise ApiProblem(404, "plugin_not_found", "Plugin not found.")
+        return plugin
+
+    @app.post("/plugins", status_code=201)
+    def create_plugin(draft: PluginDraft, account: SignedIn) -> UserPlugin:
+        return save_plugin(uuid4().hex, draft, account, create=True)
+
+    @app.put("/plugins/{plugin_id}")
+    def update_plugin(plugin_id: str, draft: PluginDraft, account: SignedIn) -> UserPlugin:
+        return save_plugin(plugin_id, draft, account, create=False)
+
+    @app.post("/plugins/{plugin_id}/remove", status_code=204)
+    def remove_plugin(plugin_id: str, account: SignedIn):
+        if not storage.remove_plugin(plugin_id, account.id):
+            raise ApiProblem(404, "plugin_not_found", "Plugin not found.")
 
     @app.get("/workflows", response_model_exclude_none=True)
     def list_workflows(account: OptionalAccount) -> list[Workflow]:
@@ -214,6 +266,10 @@ def create_app(dsn: str | None = None) -> FastAPI:
             raise llm_problem(error) from None
 
     def validate_saved_workflow(draft: WorkflowDraft, owner: Account | None):
+        for node in draft.nodes:
+            private_owner = node.config.get("privatePluginOwner")
+            if private_owner and (owner is None or private_owner != owner.id):
+                raise ApiProblem(403, "private_plugin_in_workflow", "Use this private plugin node in a personal workflow.")
         schedule = daily_schedule(draft)
         if schedule is None:
             validate_edges(draft)
@@ -235,6 +291,37 @@ def create_app(dsn: str | None = None) -> FastAPI:
         if workflow is None:
             raise ApiProblem(404, "workflow_not_found", "Workflow not found.")
         return workflow
+
+    @app.get("/workflow-templates", response_model_exclude_none=True)
+    def list_public_templates(
+        account: OptionalAccount,
+        q: Annotated[str, Query(max_length=100, pattern=r"^[^\x00]*$")] = "",
+        limit: Annotated[int, Query(ge=1, le=50)] = 24,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> list[TemplateSummary]:
+        return storage.list_public_templates(account.id if account else None, q.strip(), limit, offset)
+
+    @app.get("/workflow-templates/{template_id}", response_model_exclude_none=True)
+    def get_public_template(template_id: str, account: OptionalAccount) -> PublicTemplate:
+        template = storage.get_public_template(template_id, account.id if account else None)
+        if template is None:
+            raise ApiProblem(404, "template_not_found", "Published scenario not found.")
+        return template
+
+    @app.put("/workflow-templates")
+    def publish_workflow_template(publication: PublishTemplate, account: SignedIn) -> TemplateSummary:
+        workflow = get_workflow(publication.workflowId, account)
+        if workflow.languagePlugins is None:
+            raise ApiProblem(403, "template_owner_required", "Save a personal copy before publishing.")
+        draft = make_public_draft(workflow, publication.title)
+        return storage.publish_workflow_template(
+            uuid4().hex, account, workflow.id, publication.title, publication.description, publication.tags, draft,
+        )
+
+    @app.post("/workflow-templates/{template_id}/remove", status_code=204)
+    def remove_public_template(template_id: str, account: SignedIn):
+        if not storage.remove_public_template(template_id, account.id):
+            raise ApiProblem(404, "template_not_found", "Published scenario not found.")
 
     @app.put("/workflows/{workflow_id}", response_model_exclude_none=True)
     def update_workflow(workflow_id: str, draft: WorkflowDraft, account: OptionalAccount) -> Workflow:

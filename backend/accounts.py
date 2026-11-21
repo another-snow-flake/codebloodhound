@@ -1,20 +1,36 @@
 import hashlib
 import hmac
+import re
 import secrets
 from typing import Annotated
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from .schemas import Identifier, LanguagePlugin
 
 
 SESSION_HEADER = "X-CodeBloodhound-Session"
 PASSWORD_SALT_BYTES = 16
+EMAIL_ATOM = r"[A-Za-z0-9!#$%&'*+/=?^_{|}~-]+"
+EMAIL_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+EMAIL_PATTERN = re.compile(rf"{EMAIL_ATOM}(?:\.{EMAIL_ATOM})*@(?:{EMAIL_LABEL}\.)+{EMAIL_LABEL}")
 
 
 class Credentials(BaseModel):
     username: Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,39}$")]
     password: Annotated[str, StringConstraints(min_length=10, max_length=128)]
+
+
+class RegistrationCredentials(Credentials):
+    email: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=254)]
+    confirmPassword: Annotated[str, StringConstraints(min_length=10, max_length=128)]
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, email: str) -> str:
+        if len(email.partition("@")[0]) > 64 or not EMAIL_PATTERN.fullmatch(email):
+            raise ValueError("Enter a valid email address.")
+        return email.lower()
 
 
 class PluginSelection(BaseModel):
@@ -24,6 +40,7 @@ class PluginSelection(BaseModel):
 class Account(PluginSelection):
     id: Identifier
     username: str
+    email: str | None = None
 
 
 class Session(BaseModel):

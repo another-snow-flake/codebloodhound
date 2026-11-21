@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from .kotlin_text import without_comments
 from .schemas import Finding, Severity
-from .language_plugins import RULE_MESSAGES, active_suffixes, javascript_issues, python_issues
+from .language_plugins import LANGUAGE_SUFFIXES, RULE_MESSAGES, active_suffixes, javascript_issues, python_issues
 from .sources import read_project_text
 
 
@@ -121,9 +121,11 @@ def find_kotlin_issues(data: bytes, scope: PurePosixPath | None = None) -> list[
     return findings
 
 
-def find_static_issues(data: bytes, scope: PurePosixPath | None = None, plugins: Sequence[str] = ()) -> list[Finding]:
-    findings = find_kotlin_issues(data, scope)
-    suffixes = active_suffixes(plugins)
+def find_static_issues(
+    data: bytes, scope: PurePosixPath | None = None, plugins: Sequence[str] = (), *, language: str | None = None,
+) -> list[Finding]:
+    findings = [] if language else find_kotlin_issues(data, scope)
+    suffixes = LANGUAGE_SUFFIXES[language] if language else active_suffixes(plugins)
     if not suffixes:
         return findings
     for path, content in read_project_text(data, lambda candidate: candidate.suffix.lower() in suffixes, scope):

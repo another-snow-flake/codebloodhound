@@ -7,6 +7,7 @@ from typing import NamedTuple
 
 from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities, template_analysis
 from .conditions import evaluate_condition, validate_condition
+from .language_plugins import LANGUAGE_SUFFIXES
 from .llm import LlmError, ModelSpec, client_for, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_static_issues
@@ -23,6 +24,12 @@ MAX_PORTS = 4
 MAX_NOTE = 1000
 COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 TRANSFER_PREVIEW_SIZE = 5
+
+
+def node_scanner(node: Node) -> str | None:
+    if node.type == "custom":
+        return node.config.get("scanner")
+    return node.type if node.type in SCANNERS else None
 
 
 def _port_count(node: Node, key: str) -> int:
@@ -50,6 +57,14 @@ def validate_node_config(node: Node) -> None:
     ):
         raise ApiProblem(422, "invalid_node_config",
                          "A custom node needs a title up to 40 characters, a #rrggbb color, 1-4 inputs and 0-4 outputs.")
+    scanner = node_scanner(node)
+    if scanner is not None and (not isinstance(scanner, str) or scanner not in SCANNERS):
+        raise ApiProblem(422, "invalid_node_config", "Choose a built-in scanner for the custom node.")
+    language = node.config.get("language")
+    if language is not None and (
+        not isinstance(language, str) or language not in LANGUAGE_SUFFIXES or scanner not in ("secrets", "sast")
+    ):
+        raise ApiProblem(422, "invalid_node_config", "Choose a supported language for secret scanning or static analysis.")
 
 
 def output_handles(node: Node) -> set[str | None]:
@@ -68,7 +83,10 @@ def input_handles(node: Node) -> set[str | None]:
         return set()
     if node.type == "custom":
         count = _port_count(node, "inputs")
-        return {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
+        handles = {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
+        if node_scanner(node):
+            handles.add("source")
+        return handles
     return {None}
 
 
@@ -268,6 +286,7 @@ def execute_plan(
             {key: analysis for item in flow_inputs for key, analysis in item.analyses.items()},
         )
         handle = None
+        scanner = node_scanner(node)
         try:
             if node.type == "trigger":
                 result.output = {"sourceId": source_id}
@@ -275,12 +294,14 @@ def execute_plan(
                 path = archive_scope(archive, node.config["path"])
                 context = NodeContext({}, {}, path)
                 result.output = {"sourcePath": path.as_posix()}
-            elif node.type in SCANNERS:
+            elif scanner is not None:
                 path = scope_input.source_path if scope_input is not None else None
-                if node.type == "sca":
+                if scanner == "sca":
                     findings = find_vulnerable_dependencies(archive, path)
+                elif node.type == "custom" and (language := node.config.get("language")):
+                    findings = SCANNERS[scanner](archive, path, language=language)
                 else:
-                    findings = SCANNERS[node.type](archive, path, report.languagePlugins or ())
+                    findings = SCANNERS[scanner](archive, path, report.languagePlugins or ())
                 report.findings.extend(findings)
                 context.findings.update((finding.id, finding) for finding in findings)
                 result.output = {"findings": [finding.model_dump(mode="json", exclude_unset=True) for finding in findings]}

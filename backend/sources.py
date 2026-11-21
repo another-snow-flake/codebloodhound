@@ -8,7 +8,7 @@ from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 from zlib import error as ZipDecodeError
 
-from .language_plugins import active_suffixes
+from .language_plugins import LANGUAGE_SUFFIXES, active_suffixes
 from .schemas import ApiProblem, Finding
 
 
@@ -118,12 +118,19 @@ def archive_scope(data: bytes, value: str) -> PurePosixPath:
     raise ApiProblem(422, "scan_source_not_found", "The selected file or folder is absent from the project ZIP.")
 
 
-def find_secrets(data: bytes, scope: PurePosixPath | None = None, plugins: Sequence[str] = ()) -> list[Finding]:
-    plugin_suffixes = active_suffixes(plugins)
+def find_secrets(
+    data: bytes, scope: PurePosixPath | None = None, plugins: Sequence[str] = (), *, language: str | None = None,
+) -> list[Finding]:
+    plugin_suffixes = LANGUAGE_SUFFIXES[language] if language else active_suffixes(plugins)
+
+    def matches_file(path: PurePosixPath) -> bool:
+        suffix = path.suffix.lower()
+        if language:
+            return suffix in plugin_suffixes
+        return suffix in TEXT_SUFFIXES or suffix in plugin_suffixes or path.name.startswith(".env")
+
     findings = []
-    for path, content in read_project_text(
-        data, lambda path: path.suffix.lower() in TEXT_SUFFIXES | plugin_suffixes or path.name.startswith(".env"), scope
-    ):
+    for path, content in read_project_text(data, matches_file, scope):
         suffix = path.suffix.lower()
         lines = content.splitlines()
         matched_lines = {

@@ -99,7 +99,7 @@ svg.edges text{font-size:11px;fill:var(--mute)}
 .insp{position:absolute;top:12px;right:12px;width:268px;max-height:calc(100% - 24px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .insp h3,.ph h3{margin:0 0 8px;font-size:14px}
 label.f{display:block;margin:8px 0 4px;color:var(--mute);font-size:12.5px}
-.insp select,.insp input,.modal select,.modal input[type=text],.modal input[type=password]{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:6px 8px}
+.insp select,.insp input,.modal select,.modal input[type=text],.modal input[type=password],.modal input[type=email]{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:6px 8px}
 .note{color:var(--mute);font-size:12.5px;line-height:1.45;margin:6px 0 0}
 .rep{border-top:1px solid var(--line);background:var(--panel);max-height:42vh;display:flex;flex-direction:column;min-height:0}
 .rep.min .rb{display:none}
@@ -173,6 +173,30 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(460px,100%);max-height:90vh;overflow:auto}
 .modal h2{margin:0 0 4px;font-size:18px}
 .modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.app.library-open{grid-template-rows:auto minmax(0,1fr)}
+.app.library-open :is(.src,#main,#fileMenu,#nodeCatalogBtn,#wfName,#runBtn){display:none}
+.workflow-library{min-height:0;overflow:auto;background:var(--bg)}
+.library-content{max-width:1080px;margin:auto;padding:clamp(20px,4vw,48px)}
+.library-heading,.library-actions,.library-search{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.library-heading{justify-content:space-between;margin-bottom:18px}
+.library-heading h1{margin:0;font-size:clamp(22px,4vw,32px)}
+.library-heading h2{margin:0;font-size:20px}
+.library-sections{margin-bottom:20px}
+.library-search input{flex:1;min-width:140px;max-width:440px;padding:8px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);font-family:inherit}
+.library-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,270px),1fr));gap:14px;margin:14px 0}
+.library-card{display:flex;flex-direction:column;gap:10px;min-width:0;padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow-wrap:anywhere}
+.library-card h2,.library-card h3,.library-card p{margin:0}
+.library-card h2,.library-card h3{font-size:16px}
+.library-card .library-description{white-space:pre-wrap}
+.library-card .library-actions{margin-top:auto}
+.library-tags{display:flex;flex-wrap:wrap;gap:6px}
+.library-tags .btn{padding:3px 8px;font-size:12px}
+#ovPublish .library-actions{flex-wrap:wrap}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media (max-width:720px){
+  .app>header{flex-wrap:wrap}
+  .app>header #wfName{flex:1;min-width:120px}
+}
 #ovGenerate .generate-prompt{height:112px}
 #generatePreview{margin-top:12px}
 #generateWarnings:empty{display:none}
@@ -195,7 +219,7 @@ body{font-size:14px;background:var(--bg)}
 .btn.pri{background:linear-gradient(90deg,var(--bar),var(--bar2),var(--bar));color:var(--acc-ink);font-weight:600}
 .btn.ico{width:36px;height:36px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:17px}
 .btn:disabled{opacity:.55;cursor:default}
-.insp select,.insp input,.insp textarea,.modal select,.modal input[type=text],.modal input[type=password],.modal textarea,.chat input,.src input[type=text]{background:var(--inp);color:var(--ink);border:0;border-radius:14px;padding:9px 12px}
+.insp select,.insp input,.insp textarea,.modal select,.modal input[type=text],.modal input[type=password],.modal input[type=email],.modal textarea,.chat input,.src input[type=text]{background:var(--inp);color:var(--ink);border:0;border-radius:14px;padding:9px 12px}
 .tag{background:var(--inp);border:0;color:var(--mute);font-weight:500}
 .tag.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,var(--inp))}
 /* верхняя панель */
@@ -212,6 +236,11 @@ header #wfName::placeholder{color:rgba(255,255,255,.7)}
 .menu .dd{background:var(--pop3);border:0;border-radius:20px;min-width:220px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);margin-top:10px}
 .dd button{text-align:center;color:#fff;border-radius:12px;padding:10px 12px;font-weight:500;background:none;width:100%}
 .dd button:hover{background:rgba(255,255,255,.2)}
+#accountMenu{margin-inline-start:auto;flex:none}
+#accountMenu .dd{left:auto;right:0}
+#accountBtn{max-width:clamp(100px,30vw,190px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.profile-details dt{margin-top:12px;color:var(--mute)}
+.profile-details dd{margin:4px 0 0;overflow-wrap:anywhere}
 /* строка проекта */
 .src{background:var(--bg);border:0;padding:10px 14px}
 .src.need{box-shadow:inset 0 0 0 2px var(--bad)}

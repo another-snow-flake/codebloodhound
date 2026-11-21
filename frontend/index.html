@@ -23,12 +23,20 @@
       <button data-a="dl">Экспорт (JSON)</button>
     </div>
   </div>
-  <button class="btn" id="libBtn" aria-controls="left" aria-expanded="false">Библиотека</button>
-  <button class="btn" id="accountBtn">Войти</button>
+  <button class="btn" id="libBtn" aria-controls="workflowLibrary" aria-pressed="false">Библиотека</button>
+  <button class="btn" id="nodeCatalogBtn" aria-controls="left" aria-expanded="false">Каталог нод</button>
   <input id="wfName" class="btn" aria-label="Название сценария" value="Проверка секретов">
   <span class="sp"></span>
   <span class="tag" id="apiTag">проверяю связь…</span>
   <button class="btn pri" id="runBtn">Запустить</button>
+  <div class="menu" id="accountMenu">
+    <button class="btn" id="accountBtn" type="button">Войти</button>
+    <div class="dd" id="accountActions">
+      <button id="openProfile" type="button">Профиль</button>
+      <button id="openAccountSettings" type="button">Настройки аккаунта</button>
+      <button id="logoutBtn" type="button">Выйти</button>
+    </div>
+  </div>
 </header>
 <div class="src" id="src">
   <b>Проект:</b>
@@ -43,7 +51,7 @@
   <aside id="left">
     <div class="tabs"><button class="on" data-t="cat">Каталог нод</button><button data-t="my">Мои сценарии</button></div>
     <div class="list" id="leftList"></div>
-    <button class="libtab" id="libTab" aria-label="Библиотека нод" title="Библиотека нод"></button>
+    <button class="libtab" id="libTab" aria-label="Каталог нод" title="Каталог нод"></button>
   </aside>
   <section class="center">
     <div class="canvas" id="canvas"><div class="board" id="board">
@@ -69,6 +77,50 @@
     </div>
   </section>
 </main>
+<section id="workflowLibrary" class="workflow-library" aria-labelledby="libraryTitle" hidden>
+  <div class="library-content">
+    <div class="library-heading">
+      <div>
+        <h1 id="libraryTitle">Библиотека</h1>
+      </div>
+      <div class="library-actions">
+        <button class="btn" id="libraryBack">К редактору</button>
+      </div>
+    </div>
+    <div class="seg library-sections" aria-label="Разделы библиотеки" role="group">
+      <button class="on" id="libraryWorkflowsTab" type="button" aria-controls="libraryWorkflows" aria-pressed="true">Сценарии</button>
+      <button id="libraryPluginsTab" type="button" aria-controls="libraryPlugins" aria-pressed="false">Плагины</button>
+    </div>
+    <section id="libraryWorkflows" aria-labelledby="workflowSectionTitle">
+      <div class="library-heading">
+        <h2 id="workflowSectionTitle">Шаблоны сценариев</h2>
+        <button class="btn pri" id="libraryPublish">Опубликовать сценарий</button>
+      </div>
+      <form id="librarySearchForm" class="library-search">
+        <label class="visually-hidden" for="librarySearch">Название, описание или тег</label>
+        <input id="librarySearch" type="search" placeholder="Название, описание или тег" maxlength="100">
+        <button type="submit" class="btn">Найти</button>
+      </form>
+      <p class="note" id="libraryStatus" aria-live="polite"></p>
+      <div id="libraryCards" class="library-cards"></div>
+      <button class="btn" id="libraryMore" hidden>Показать ещё</button>
+    </section>
+    <section id="libraryPlugins" aria-labelledby="pluginSectionTitle" hidden>
+      <div class="library-heading">
+        <h2 id="pluginSectionTitle">Плагины</h2>
+        <button class="btn pri" id="newPlugin">Создать плагин</button>
+      </div>
+      <form id="pluginSearchForm" class="library-search">
+        <label class="visually-hidden" for="pluginSearch">Название, описание, автор или язык</label>
+        <input id="pluginSearch" type="search" placeholder="Название, описание, автор или язык" maxlength="100">
+        <button type="submit" class="btn">Найти</button>
+      </form>
+      <p class="note" id="pluginStatus" aria-live="polite"></p>
+      <div id="pluginCards" class="library-cards"></div>
+      <button class="btn" id="pluginMore" hidden>Показать ещё</button>
+    </section>
+  </div>
+</section>
 </div>
 
 <div class="ov" id="ovSet"><div class="modal">
@@ -109,35 +161,75 @@
     <button type="button" class="btn" id="generateApply" hidden>Открыть черновик</button>
   </div>
 </form></div>
-<div class="ov" id="ovNode"><div class="modal">
-  <h2>Своя нода</h2><p class="note">Своя нода передаёт находки со входов на все выходы. Её удобно использовать как шаг ручной проверки, комментарий или развилку.</p>
+<div class="ov" id="ovNode"><form class="modal" id="customNodeForm" role="dialog" aria-modal="true" aria-labelledby="cnHeading">
+  <h2 id="cnHeading">Своя нода</h2>
   <label class="f" for="cnTitle">Название</label><input type="text" id="cnTitle" maxlength="40" placeholder="Например, «Ревью тимлида»">
+  <label class="f" for="cnScanner">Действие</label><select id="cnScanner"></select>
+  <div id="cnLanguageRow" hidden><label class="f" for="cnLanguage">Язык проверки</label><select id="cnLanguage"></select></div>
   <div class="ports"><div><label class="f" for="cnIn">Входов</label><select id="cnIn"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
     <div><label class="f" for="cnOut">Выходов</label><select id="cnOut"><option>0</option><option selected>1</option><option>2</option><option>3</option><option>4</option></select></div></div>
   <label class="f">Цвет</label><div class="swatches" id="cnColors"></div>
   <label class="f" for="cnNote">Заметка (необязательно)</label><textarea class="note-in" id="cnNote" maxlength="1000" placeholder="Что проверить на этом шаге"></textarea>
-  <label class="chk note"><input type="checkbox" id="cnSave" checked> Добавить ноду в библиотеку для повторного использования</label>
-  <div class="row"><button class="btn" data-close>Отмена</button><button class="btn pri" id="cnCreate">Добавить на холст</button></div>
-</div></div>
+  <div id="cnPluginFields" hidden>
+    <label class="f" for="cnDescription">Описание плагина</label><textarea class="note-in" id="cnDescription" maxlength="1200"></textarea>
+    <label class="f" for="cnVisibility">Доступ</label><select id="cnVisibility"><option value="private">Приватный</option><option value="public">Публичный</option></select>
+    <p class="note" id="cnPublicNote" hidden>Другие пользователи увидят описание и настройки ноды, включая заметку, и смогут добавить копию.</p>
+  </div>
+  <label class="chk note" id="cnSaveRow"><input type="checkbox" id="cnSave" checked> Сохранить в общем каталоге нод</label>
+  <p class="note" id="cnStatus" aria-live="polite"></p>
+  <div class="row"><button type="button" class="btn" data-close>Отмена</button><button type="submit" class="btn pri" id="cnCreate">Добавить на холст</button></div>
+</form></div>
 <div class="ov" id="ovAccount"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
-  <h2 id="accountTitle">Аккаунт</h2>
-  <form id="accountForm">
+  <h2 id="accountTitle" tabindex="-1">Вход</h2>
+  <form id="accountForm" method="post">
     <label class="f" for="accountUsername">Имя пользователя</label>
-    <input id="accountUsername" type="text" autocomplete="username" required minlength="3" maxlength="40">
+    <input id="accountUsername" name="username" type="text" autocomplete="username" required minlength="3" maxlength="40">
     <label class="f" for="accountPassword">Пароль</label>
-    <input id="accountPassword" type="password" autocomplete="current-password" required minlength="10" maxlength="128">
+    <input id="accountPassword" name="password" type="password" autocomplete="current-password" required minlength="10" maxlength="128">
     <p class="note">Вход открывает новое рабочее пространство. Текущий сценарий можно сохранить перед переключением.</p>
-    <div class="row account-actions"><button type="button" class="btn" data-close>Закрыть</button><button type="submit" class="btn" value="register">Регистрация</button><button type="submit" class="btn pri" value="login">Войти</button></div>
+    <div class="row account-actions"><button type="button" class="btn" data-close>Закрыть</button><button type="button" class="btn" id="showRegistration">Создать аккаунт</button><button type="submit" class="btn pri">Войти</button></div>
   </form>
+  <form id="registerForm" method="post" hidden>
+    <label class="f" for="registerUsername">Имя пользователя</label>
+    <input id="registerUsername" name="username" type="text" autocomplete="username" required minlength="3" maxlength="40">
+    <label class="f" for="registerEmail">Почта</label>
+    <input id="registerEmail" name="email" type="email" autocomplete="email" required maxlength="254">
+    <label class="f" for="registerPassword">Пароль</label>
+    <input id="registerPassword" name="password" type="password" autocomplete="new-password" required minlength="10" maxlength="128">
+    <label class="f" for="registerConfirmation">Повторите пароль</label>
+    <input id="registerConfirmation" name="confirmPassword" type="password" autocomplete="new-password" required minlength="10" maxlength="128" aria-describedby="accountStatus">
+    <div class="row account-actions"><button type="button" class="btn" data-close>Закрыть</button><button type="button" class="btn" id="showLogin">Ко входу</button><button type="submit" class="btn pri">Зарегистрироваться</button></div>
+  </form>
+  <section id="accountProfile" hidden>
+    <dl class="profile-details">
+      <dt>Имя пользователя</dt><dd id="accountName"></dd>
+      <dt>Почта</dt><dd id="accountEmail"></dd>
+    </dl>
+    <div class="row account-actions"><button type="button" class="btn" data-close>Закрыть</button></div>
+  </section>
   <form id="pluginsForm" hidden>
-    <p class="note" id="accountName"></p>
+    <h3>Языковые плагины</h3>
     <p class="note">Выбор применяется к новым запускам сценариев этого аккаунта. Плагины добавляют поиск секретов и SAST.</p>
     <label class="chk note"><input type="checkbox" name="plugin" value="python"> Python</label>
     <label class="chk note"><input type="checkbox" name="plugin" value="javascript"> JavaScript и TypeScript</label>
-    <div class="row account-actions"><button type="button" class="btn" id="logoutBtn">Выйти</button><button type="button" class="btn" data-close>Закрыть</button><button type="submit" class="btn pri">Сохранить плагины</button></div>
+    <div class="row account-actions"><button type="button" class="btn" data-close>Закрыть</button><button type="submit" class="btn pri">Сохранить плагины</button></div>
   </form>
   <p class="note" id="accountStatus" aria-live="polite"></p>
 </div></div>
+<div class="ov" id="ovPublish"><form class="modal" id="publishForm" role="dialog" aria-modal="true" aria-labelledby="publishTitle">
+  <h2 id="publishTitle">Публикация сценария</h2>
+  <label class="f" for="publishWorkflow">Сохранённый личный сценарий</label>
+  <select id="publishWorkflow" required></select>
+  <label class="f" for="publishName">Название</label>
+  <input id="publishName" type="text" required maxlength="100">
+  <label class="f" for="publishDescription">Описание</label>
+  <textarea class="note-in" id="publishDescription" required maxlength="1200"></textarea>
+  <label class="f" for="publishTags">Теги через запятую</label>
+  <input id="publishTags" type="text" maxlength="270" placeholder="Kotlin, SCA, перед релизом">
+  <p class="note">Все пользователи библиотеки смогут увидеть граф, включая пути и условия. Привязки ZIP и webhook и заметки нод исключаются.</p>
+  <p class="note" id="publishStatus" aria-live="polite"></p>
+  <div class="row library-actions"><button type="button" class="btn" data-close>Закрыть</button><button type="submit" class="btn pri" id="publishSubmit">Опубликовать</button></div>
+</form></div>
 <div class="ov" id="ovHistory"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
   <h2 id="historyTitle">История запусков</h2>
   <p class="note" id="historyWorkflow"></p>

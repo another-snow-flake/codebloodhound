@@ -53,7 +53,8 @@ class CustomNodeValidationTest(unittest.TestCase):
         self.assert_rejected(nodes, [edge("end", "s")], "invalid_workflow")
 
     def test_config_is_checked(self):
-        for bad in ({"color": "red"}, {"inputs": 0}, {"inputs": 5}, {"outputs": -1}, {"title": ""}, {"inputs": True}):
+        for bad in ({"color": "red"}, {"inputs": 0}, {"inputs": 5}, {"outputs": -1}, {"title": ""},
+                    {"inputs": True}, {"scanner": "notify"}, {"scanner": []}):
             nodes = [custom("c", **{key: value for key, value in custom("c")["config"].items()} | bad)]
             nodes[0]["config"].update(bad)
             self.assert_rejected(nodes, [], "invalid_node_config")
@@ -80,6 +81,41 @@ class CustomNodeRunTest(unittest.TestCase):
         self.assertEqual([(item.port, item.nodeId) for item in results["c"].outputs],
                          [("out1", "yes"), ("out2", "no")])
         self.assertEqual(results["yes"].inputs[0].findingIds, [finding_id])
+
+    def test_custom_scanner_checks_the_selected_scope_and_forwards_its_findings(self):
+        archive = io.BytesIO()
+        with ZipFile(archive, "w") as project:
+            project.writestr("src/app.properties", "app.password=synthetic-in-scope")
+            project.writestr("app.properties", "app.password=synthetic-out-of-scope")
+        for scoped in (True, False):
+            with self.subTest(scoped=scoped):
+                nodes = [node("t", "trigger"), custom("c", inputs=2, outputs=2, scanner="secrets"),
+                         node("check", "condition", minSeverity="high")]
+                edges = [edge("t", "c", into="in2"), edge("c", "check", out="out2")]
+                if scoped:
+                    nodes.append(node("where", "source", path="src"))
+                    edges.append(edge("where", "c", into="source"))
+                report = RunReport(runId="r", workflowId="w", nodes=[NodeResult(nodeId=n["id"]) for n in nodes])
+                execute_plan(Mock(), report, plan_run(draft(nodes, edges)), "src", archive.getvalue())
+                results = {result.nodeId: result for result in report.nodes}
+                expected_files = {"src/app.properties"} if scoped else {"src/app.properties", "app.properties"}
+                self.assertEqual(report.status, "succeeded")
+                self.assertEqual({finding.file for finding in report.findings}, expected_files)
+                self.assertEqual(results["check"].inputs[0].findingCount, len(expected_files))
+                self.assertEqual(results["c"].output.get("sourcePath"), "src" if scoped else None)
+
+    def test_language_scanner_checks_only_its_selected_language(self):
+        archive = io.BytesIO()
+        with ZipFile(archive, "w") as project:
+            project.writestr("app.py", 'api_key = "synthetic-test-key-py"')
+            project.writestr("app.ts", 'const api_key = "synthetic-test-key-ts";')
+        nodes = [node("t", "trigger"), custom("c", scanner="secrets", language="python")]
+        workflow = draft(nodes, [edge("t", "c")])
+        report = RunReport(runId="r", workflowId="w", languagePlugins=["javascript"],
+                           nodes=[NodeResult(nodeId=n["id"]) for n in nodes])
+        execute_plan(Mock(), report, plan_run(workflow), "src", archive.getvalue())
+        self.assertEqual(report.status, "succeeded")
+        self.assertEqual([finding.file for finding in report.findings], ["app.py"])
 
     def test_count_and_regex_send_data_only_to_the_matching_branch(self):
         nodes = [
