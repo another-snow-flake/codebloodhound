@@ -1,21 +1,24 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, File, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from .ai import answer_report_question
+from .exports import export_findings
 from .llm import LlmError, ModelSpec, check_model, client_for, default_model_id, list_model_options, resolve_model
+from .repositories import download_repository
 from .runner import execute_plan, plan_run, validate_edges, validate_node_config
 from .schemas import (
     ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, Node, NodeResult,
-    NodeTemplate, NodeTemplateDraft, Position,
+    NodeTemplate, NodeTemplateDraft, Position, RepositorySourceRequest,
     RunChatRequest, RunChatResponse, RunCreated,
-    RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
+    RunListItem, RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
 )
 from .sources import MAX_UPLOAD, validate_zip
 from .storage import Storage, database_url
@@ -97,9 +100,16 @@ def create_app(dsn: str | None = None) -> FastAPI:
         if len(archive) > MAX_UPLOAD:
             raise ApiProblem(413, "upload_too_large", "Upload a ZIP up to 10 MiB.")
         validate_zip(archive)
+        return save_source(archive)
+
+    def save_source(archive: bytes) -> SourceCreated:
         source_id = uuid4().hex
         storage.save_source(source_id, archive)
         return SourceCreated(sourceId=source_id)
+
+    @app.post("/sources/repository", status_code=201)
+    def import_repository(source: RepositorySourceRequest) -> SourceCreated:
+        return save_source(download_repository(source.url))
 
     @app.get("/node-templates")
     def list_node_templates() -> list[NodeTemplate]:
@@ -167,13 +177,29 @@ def create_app(dsn: str | None = None) -> FastAPI:
         report = RunReport(
             runId=uuid4().hex,
             workflowId=workflow_id,
+            createdAt=datetime.now(timezone.utc),
             status="queued",
-            nodes=[NodeResult(nodeId=node.id, status="queued") for node in workflow.nodes],
+            nodes=[
+                NodeResult(
+                    nodeId=node.id, status="queued", type=node.type,
+                    label=node.config["title"] if node.type == "custom" else None,
+                )
+                for node in workflow.nodes
+            ],
             findings=[],
         )
         storage.save_run(report)
         tasks.add_task(execute_plan, storage, report, plan, request.sourceId, archive, model)
         return RunCreated(runId=report.runId, status="queued")
+
+    @app.get("/workflows/{workflow_id}/runs")
+    def list_runs(
+        workflow_id: str,
+        limit: Annotated[int, Query(ge=1, le=100)] = 25,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> list[RunListItem]:
+        get_workflow(workflow_id)
+        return storage.list_runs(workflow_id, limit, offset)
 
     @app.get("/runs/{run_id}", response_model_exclude_unset=True)
     def get_run(run_id: str) -> RunReport:
@@ -181,6 +207,22 @@ def create_app(dsn: str | None = None) -> FastAPI:
         if report is None:
             raise ApiProblem(404, "run_not_found", "Run not found.")
         return report
+
+    @app.get("/runs/{run_id}/findings.json")
+    def download_findings(run_id: str) -> JSONResponse:
+        report = get_run(run_id)
+        if report.status not in ("succeeded", "failed"):
+            raise ApiProblem(409, "run_in_progress", "Wait for the workflow to finish before exporting findings.")
+        source_id = next(
+            (result.output["sourceId"] for result in report.nodes
+             if result.output and isinstance(result.output.get("sourceId"), str)),
+            None,
+        )
+        archive = storage.get_source(source_id) if source_id and report.findings else None
+        return JSONResponse(
+            export_findings(report.findings, archive),
+            headers={"Content-Disposition": 'attachment; filename="findings.json"'},
+        )
 
     @app.post("/runs/{run_id}/chat")
     def chat_about_run(run_id: str, request: RunChatRequest) -> RunChatResponse:

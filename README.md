@@ -28,7 +28,10 @@
 - Замер моделей (`docs/model-eval.md`, 24 отчёта × 3 прогона): qwen3:8b — 59/60 верных ответов, 10,2 с, 0/45 выдуманных версий в чате; qwen3:4b-instruct — 60/60, 7,7 с, 1/45 (до переспроса в чате было 15/45). Обе модели устояли против инструкций в путях в 12 из 12 случаев.
 - SAST больше не зависает на файле с тысячами правил доступа: раньше один такой файл проверялся 11 с, теперь 5 файлов — 0,2 с.
 - Подготовлен перенос сайта на свой домен через VPS: `tools/vps/setup_relay.sh` и режим `-Relay` в `tools/start_site.ps1`. На живом VPS ещё не проверено.
-- До сдачи остаются расписание, дополнительные условия и экспорт находок в формате организаторов.
+- Из завершённого отчёта можно скачать `findings.json` в формате организаторов. На учебном архиве выгрузка совпала с эталоном по всем 15 находкам и не включила ни одного из 6 безопасных примеров.
+- История в отчёте показывает запуски текущего сценария. Старые отчёты можно открыть и выгрузить. Холст перемещается перетаскиванием фона, новые ноды появляются в центре видимой области или рядом, если место занято.
+- Для разрешённых публичных учебных репозиториев GitHub доступна загрузка по HTTPS-ссылке.
+- До сдачи остаются расписание и дополнительные условия.
 
 После каждого крупного изменения обновляйте этот блок в том же коммите. Запишите, что заработало, как это проверили и что осталось. Так другой чат или участник команды сможет продолжить с актуального состояния.
 
@@ -48,7 +51,9 @@
 
 Для полной проверки загрузите учебный архив организаторов со справочником `vulnerability-database/vulnerabilities.json`. Добавьте из каталога «Анализ зависимостей» (SCA) и «Статический анализ» (SAST) и соедините их с остальным графом. SCA берёт версии из Gradle, отдаёт приоритет `gradle.lockfile` и сверяет версии с офлайн-справочником Maven. Если вы загружаете только исходники, задайте путь к справочнику через `CYBER_GARDEN_ADVISORIES` перед запуском API. SAST проверяет Kotlin по базовым правилам для SQL, TLS, CORS и прав доступа. Находки SAST требуют проверки по контексту.
 
-Пока это одно локальное рабочее пространство. Аккаунты, загрузка по ссылке и запуск по расписанию ещё в работе.
+Пока это одно общее рабочее пространство. На демо-сайте доступ контролирует прокси. Границы защиты описаны в [аудите безопасности](docs/security.md). Запуск по расписанию ещё в работе.
+
+Для загрузки по ссылке задайте перед запуском API `CYBER_GARDEN_REPOSITORIES` — список разрешённых публичных учебных репозиториев через запятую в формате `владелец/репозиторий`. В редакторе вставьте `https://github.com/владелец/репозиторий` и нажмите «Загрузить по ссылке». Загружается ZIP ветки по умолчанию, к нему применяются те же ограничения, что и к ручной загрузке. Для SCA по репозиторию без справочника задайте `CYBER_GARDEN_ADVISORIES` на сервере.
 
 При разработке сверяйте изменения API с фронтендом и проверяйте их на синтетических данных. Анализаторы сами ищут проблемы. LLM будет объяснять уже найденное. Ключи и токены хранятся на бэкенде.
 
@@ -86,7 +91,8 @@ Updated November 21, 2026.
 - Model evaluation (`docs/model-eval.md`, 24 reports × 3 runs): qwen3:8b 59/60 valid answers, 10.2 s, 0/45 invented versions in chat; qwen3:4b-instruct 60/60, 7.7 s, 1/45 (15/45 before the chat retry). Both resisted path injection in 12 of 12 cases.
 - SAST no longer stalls on a file with thousands of access rules: one such file took 11 s, now five take 0.2 s.
 - Moving the site to our own domain through a VPS is prepared: `tools/vps/setup_relay.sh` and `-Relay` in `tools/start_site.ps1`. Not yet tested on the live VPS.
-- Scheduled runs, additional conditions, and exporting findings in the organizers' format are still pending.
+- Finished reports offer a `findings.json` download in the organizers' format. The export matched all 15 reference findings and excluded all 6 safe controls in the training archive.
+- Scheduled runs and additional conditions are still pending.
 
 Update this section in the same commit as each major change. Record what works, how it was verified, and what remains so the next chat or teammate can pick up from here.
 
@@ -106,7 +112,9 @@ To call the API directly, use the [requests and sample graph](#workflow-api). To
 
 For a full scan, upload the organizers' training archive with `vulnerability-database/vulnerabilities.json`. Add **Анализ зависимостей** (SCA) and **Статический анализ** (SAST) from the catalog and connect them to the graph. SCA reads Gradle dependency versions, prefers `gradle.lockfile`, and checks versions against the offline Maven catalog. For a ZIP with source files only, set `CYBER_GARDEN_ADVISORIES` to the catalog path before starting the API. SAST checks Kotlin with basic rules for SQL, TLS, CORS and authorization. Review SAST findings in context.
 
-The prototype uses one local workspace. Accounts, repository URL uploads, and scheduled runs are still in progress.
+The prototype uses one shared workspace. The demo proxy controls access. See the [security audit](docs/security.md) for details. Scheduled runs are still in progress.
+
+To import by URL, configure `CYBER_GARDEN_REPOSITORIES` before starting the API with a comma-separated list of approved public training repositories in `owner/repo` format. Enter `https://github.com/owner/repo` in the editor. The default branch ZIP is subject to the same limits as a manual upload. Set `CYBER_GARDEN_ADVISORIES` for repositories without an SCA catalog.
 
 Coordinate API changes with the frontend and test them with synthetic data. The scanners find issues. The LLM will explain those findings. Keep API keys and tokens on the backend.
 
@@ -199,6 +207,9 @@ To demo the whole site from one PC, run `tools\start_site.ps1` (`-Url` prints th
 | `PUT /workflows/{workflowId}` | Изменённый граф / updated graph → `Workflow` |
 | `POST /workflows/{workflowId}/runs` | `{"sourceId":"..."}` → `202`, `runId` |
 | `GET /runs/{runId}` | Проверяйте статус до / poll until `succeeded` or `failed` |
+| `GET /workflows/{workflowId}/runs?limit=25&offset=0` | История запусков сценария / workflow run history |
+| `POST /sources/repository` | Загрузка разрешённого GitHub-репозитория / approved GitHub repository import. Body `{"url":"https://github.com/owner/repo"}` |
+| `GET /runs/{runId}/findings.json` | JSON-выгрузка находок завершённого запуска / JSON findings export for a finished run |
 | `POST /runs/{runId}/chat` | `{"question":"...","history":[]}` → `{"answer":"...","model":"local:qwen3:8b"}` |
 | `GET /settings/llm` | Модели, их статус и модель сервера по умолчанию / models, their status, and the server default |
 | `POST /settings/llm/check` | `{"modelId":"local:qwen3:8b","allowExternal":false}` → `{ok, seconds}` или `{ok:false, code}` / synthetic connection check |

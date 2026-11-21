@@ -3,7 +3,7 @@ import os
 import psycopg
 from psycopg.types.json import Jsonb
 
-from .schemas import NodeTemplate, RunReport, Workflow
+from .schemas import NodeTemplate, RunListItem, RunReport, Workflow
 
 
 DEFAULT_DATABASE_URL = "postgresql://cyber_garden:cyber_garden_dev@127.0.0.1:5432/cyber_garden"
@@ -31,6 +31,10 @@ class Storage:
                 )
             """)
             connection.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, body JSONB NOT NULL)")
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS runs_workflow_history_idx
+                ON runs ((body ->> 'workflowId'), (body ->> 'createdAt') DESC NULLS LAST, id DESC)
+            """)
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS node_templates (
                     id TEXT PRIMARY KEY,
@@ -110,3 +114,18 @@ class Storage:
         with self.connect() as connection:
             row = connection.execute("SELECT body FROM runs WHERE id = %s", (run_id,)).fetchone()
         return RunReport.model_validate(row[0]) if row else None
+
+    def list_runs(self, workflow_id: str, limit: int, offset: int) -> list[RunListItem]:
+        with self.connect() as connection:
+            rows = connection.execute("""
+                SELECT id, body ->> 'status', body ->> 'createdAt',
+                       jsonb_array_length(COALESCE(body -> 'findings', '[]'::jsonb))
+                FROM runs
+                WHERE body ->> 'workflowId' = %s
+                ORDER BY body ->> 'createdAt' DESC NULLS LAST, id DESC
+                LIMIT %s OFFSET %s
+            """, (workflow_id, limit, offset)).fetchall()
+        return [
+            RunListItem(runId=run_id, status=status, createdAt=created_at, findingCount=count)
+            for run_id, status, created_at, count in rows
+        ]

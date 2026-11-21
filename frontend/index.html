@@ -66,14 +66,17 @@ aside{background:var(--panel);min-height:0;display:flex;flex-direction:column}
 .wfi{display:flex;gap:6px}
 .wfi .cat{flex:1}
 .center{position:relative;display:grid;grid-template-rows:1fr auto;min-width:0;min-height:0}
-.canvas{overflow:auto;position:relative;background-color:var(--bg);background-image:radial-gradient(var(--grid) 1.3px,transparent 1.3px);background-size:22px 22px}
-.board{position:relative;width:1500px;height:900px}
+.canvas{overflow:hidden;position:relative;background-color:var(--bg);background-image:radial-gradient(var(--grid) 1.3px,transparent 1.3px);background-size:22px 22px}
+.board{position:absolute;inset:0;cursor:grab;touch-action:none}
+.board.panning{cursor:grabbing}
+.canvas-home{position:absolute;bottom:12px;left:12px}
 svg.edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 svg.edges path{fill:none;stroke:var(--mute);stroke-width:2;pointer-events:stroke;cursor:pointer}
 svg.edges path.on{stroke:var(--acc);stroke-width:3}
 svg.edges path.act{stroke:var(--ok)}
 svg.edges text{font-size:11px;fill:var(--mute)}
-.node{position:absolute;width:190px;height:72px;background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;cursor:grab;user-select:none;touch-action:none}
+.node{position:absolute;left:calc(var(--node-x) + var(--pan-x,0px));top:calc(var(--node-y) + var(--pan-y,0px));width:190px;height:72px;background:var(--card);border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;cursor:grab;user-select:none;touch-action:none}
+#edgeLayer{transform:translate(var(--pan-x,0px),var(--pan-y,0px))}
 .node.sel{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 25%,transparent)}
 .node b{display:block;font-size:13.5px;line-height:1.25}
 .node .st{margin-top:6px;font-size:12px;color:var(--mute);display:flex;align-items:center;gap:6px}
@@ -101,7 +104,6 @@ svg.edges text{font-size:11px;fill:var(--mute)}
 .h:hover{border-color:var(--acc);background:var(--acc)}
 .h.in{left:-8px;top:29px}.h.out{right:-8px;top:29px}
 .h.t{right:-8px;top:17px;border-color:var(--ok)}.h.f{right:-8px;top:43px;border-color:var(--bad)}
-.hint{position:absolute;left:16px;bottom:12px;color:var(--mute);font-size:12.5px;pointer-events:none}
 .insp{position:absolute;top:12px;right:12px;width:268px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .insp h3,.ph h3{margin:0 0 8px;font-size:14px}
 label.f{display:block;margin:8px 0 4px;color:var(--mute);font-size:12.5px}
@@ -109,7 +111,9 @@ label.f{display:block;margin:8px 0 4px;color:var(--mute);font-size:12.5px}
 .note{color:var(--mute);font-size:12.5px;line-height:1.45;margin:6px 0 0}
 .rep{border-top:1px solid var(--line);background:var(--panel);max-height:42vh;display:flex;flex-direction:column;min-height:0}
 .rep.min .rb{display:none}
-.rh{display:flex;align-items:center;gap:10px;padding:8px 12px}
+.rh{display:flex;align-items:center;gap:10px;padding:8px 12px;flex-wrap:wrap}
+.run-list{max-height:50vh;overflow:auto;margin-top:12px}
+.run-list .cat{width:100%;justify-content:space-between;gap:12px}
 .rh b{font-size:14px}
 .rb{overflow:auto;padding:0 12px 12px;display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px}
 .rb h4{margin:4px 0 6px;font-size:13px;color:var(--mute);font-weight:500}
@@ -204,7 +208,6 @@ header #wfName::placeholder{color:rgba(255,255,255,.7)}
 .menu .dd{background:var(--pop3);border:0;border-radius:20px;min-width:220px;padding:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);margin-top:10px}
 .dd button{text-align:center;color:#fff;border-radius:12px;padding:10px 12px;font-weight:500;background:none;width:100%}
 .dd button:hover{background:rgba(255,255,255,.2)}
-.who{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* строка проекта */
 .src{background:var(--bg);border:0;padding:10px 14px}
 .src.need{box-shadow:inset 0 0 0 2px var(--bad)}
@@ -241,7 +244,6 @@ main.ai-open #right{display:flex}
 main.ai-open .fab{visibility:hidden}
 /* холст и ноды */
 .canvas{background-color:var(--bg);background-image:radial-gradient(var(--grid) 1.4px,transparent 1.4px)}
-.hint{color:var(--mute);font-weight:500}
 .node{background:var(--card);border:0;border-radius:18px;box-shadow:0 2px 10px rgba(0,0,0,.1)}
 .node.sel{box-shadow:0 0 0 3px var(--hl),0 2px 10px rgba(0,0,0,.1)}
 .node.s-failed{box-shadow:0 0 0 2px var(--bad)}
@@ -285,16 +287,6 @@ main.ai-open .insp{right:372px}
 #ovSet .themerow{display:flex;justify-content:center;margin-top:12px}
 .swatches button{border-color:var(--panel)}
 /* экраны регистрации и входа */
-.auth{position:fixed;inset:0;z-index:70;background:var(--page);display:none;align-items:center;justify-content:center;padding:20px;overflow:auto}
-.auth.open{display:flex}
-.auth form{width:min(340px,100%);display:flex;flex-direction:column;gap:14px}
-.auth h1{margin:0 0 4px;text-align:center;font-size:20px;font-weight:600;color:var(--ink)}
-.auth input{height:46px;border:0;border-radius:999px;background:var(--field);padding:0 20px;font-size:15px;color:#2e2e33}
-.auth .big{height:46px;border:0;border-radius:999px;font-size:15px;font-weight:500;background:var(--field);color:#79797b}
-.auth .big.main{background:linear-gradient(90deg,var(--bar),var(--bar2),var(--bar));color:#fff}
-.auth .msg-err{color:var(--bad);font-size:13px;text-align:center;min-height:18px;margin:0;background:none;border:0;padding:0}
-.auth .note{text-align:center}
-.auth .skip{border:0;background:none;color:var(--mute);text-decoration:underline;font-size:13px}
 @media (max-width:900px){
   header{flex-wrap:wrap}
   .brand{display:none}
@@ -325,15 +317,15 @@ main.ai-open .insp{right:372px}
   <input id="wfName" class="btn" aria-label="Название сценария" value="Проверка секретов">
   <span class="sp"></span>
   <span class="tag" id="apiTag">проверяю связь…</span>
-  <button class="btn who" id="userBtn">Войти</button>
   <button class="btn pri" id="runBtn">Запустить</button>
 </header>
 <div class="src" id="src">
   <b>Проект:</b>
-  <span class="note" style="margin:0">ZIP-архив до 10 МиБ. Загрузка по ссылке пока не поддерживается.</span><span class="sp"></span>
-  <label class="btn" for="fileIn" style="cursor:pointer">Выбрать ZIP</label>
+  <span class="note" style="margin:0">Учебный ZIP до 10 МиБ</span>
   <input type="file" id="fileIn" accept=".zip" hidden>
-  <button class="btn" id="upBtn">Загрузить</button>
+  <button class="btn" id="upBtn">Выбрать ZIP</button>
+  <input type="text" id="repoUrl" aria-label="Ссылка на учебный репозиторий GitHub" placeholder="https://github.com/владелец/репозиторий" maxlength="300" inputmode="url">
+  <button class="btn" id="repoBtn">Загрузить по ссылке</button>
   <span class="tag" id="srcTag">источник не выбран</span>
 </div>
 <main id="main" class="ai-open">
@@ -344,11 +336,11 @@ main.ai-open .insp{right:372px}
   </aside>
   <section class="center">
     <div class="canvas" id="canvas"><div class="board" id="board">
-      <svg class="edges" id="edges"></svg>
+      <svg class="edges" id="edges"><g id="edgeLayer"></g></svg>
     </div>
-    <div class="hint">Потяните от правой точки ноды к левой точке следующей. Delete удаляет выбранное.</div></div>
+    <button class="btn canvas-home" id="canvasHome" title="Перетащите фон, чтобы перемещаться по холсту">К началу графа</button></div>
     <div class="rep min" id="rep">
-      <div class="rh"><b>Отчёт о запуске</b><span class="tag" id="repTag">запусков ещё не было</span><span class="sp"></span><button class="btn" id="repToggle">Развернуть</button></div>
+      <div class="rh"><b>Отчёт о запуске</b><span class="tag" id="repTag">запусков ещё не было</span><span class="sp"></span><button class="btn" id="runHistory">История запусков</button><button class="btn" id="findingsDownload" hidden>Скачать находки JSON</button><button class="btn" id="repToggle">Развернуть</button></div>
       <div class="rb" id="repBody"></div>
     </div>
   </section>
@@ -392,24 +384,16 @@ main.ai-open .insp{right:372px}
   <div class="ports"><div><label class="f" for="cnIn">Входов</label><select id="cnIn"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
     <div><label class="f" for="cnOut">Выходов</label><select id="cnOut"><option>0</option><option selected>1</option><option>2</option><option>3</option><option>4</option></select></div></div>
   <label class="f">Цвет</label><div class="swatches" id="cnColors"></div>
-  <label class="f" for="cnNote">Текст в ноде (необязательно)</label><textarea class="note-in" id="cnNote" maxlength="1000" placeholder="Что проверить на этом шаге"></textarea>
-  <label class="chk note"><input type="checkbox" id="cnSave" checked> Сохранить в «Сохранённые», чтобы использовать снова</label>
+  <label class="f" for="cnNote">Заметка (необязательно)</label><textarea class="note-in" id="cnNote" maxlength="1000" placeholder="Что проверить на этом шаге"></textarea>
+  <label class="chk note"><input type="checkbox" id="cnSave" checked> Добавить ноду в библиотеку для повторного использования</label>
   <div class="row"><button class="btn" data-close>Отмена</button><button class="btn pri" id="cnCreate">Добавить на холст</button></div>
 </div></div>
-<div class="auth" id="auth" role="dialog" aria-modal="true" aria-labelledby="authTitle">
-  <form id="authForm" novalidate>
-    <h1 id="authTitle">Регистрация</h1>
-    <input type="text" id="auName" data-reg placeholder="Имя пользователя" autocomplete="username" maxlength="40">
-    <input type="email" id="auMail" placeholder="Почта" autocomplete="email" maxlength="120">
-    <input type="password" id="auPass" placeholder="Пароль" autocomplete="new-password" maxlength="100">
-    <input type="password" id="auPass2" data-reg placeholder="Повторите пароль" autocomplete="new-password" maxlength="100">
-    <p class="msg-err" id="authErr" role="alert"></p>
-    <button type="submit" class="big main" id="authMain">Зарегистрироваться</button>
-    <button type="button" class="big" id="authAlt">Войти</button>
-    <p class="note">Аккаунты пока не подключены к бэкенду: имя запоминается только в этом браузере, пароль нигде не хранится и не проверяется.</p>
-    <button type="button" class="skip" id="authSkip">Продолжить без входа</button>
-  </form>
-</div>
+<div class="ov" id="ovHistory"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+  <h2 id="historyTitle">История запусков</h2>
+  <p class="note" id="historyWorkflow"></p>
+  <div class="run-list" id="historyList" aria-live="polite"></div>
+  <div class="row"><button class="btn" id="historyMore" hidden>Показать ещё</button><button class="btn" data-close>Закрыть</button></div>
+</div></div>
 <div class="toast" id="toast" role="status"></div>
 
 <script>
@@ -480,6 +464,8 @@ async function api(path,opt){let r;
 const JH={"Content-Type":"application/json"};
 let wf={id:"",name:"Поиск секретов",nodes:[],edges:[]};
 let sel=null,sourceId=null,report=null,pick=null,running=false,uid=1;
+let historicalReport=false;
+const pan={x:0,y:0};
 const nid=()=>{let i;do{i="n"+uid++}while(wf.nodes.some(n=>n.id===i));return i};
 const eid=()=>"e"+Math.random().toString(36).slice(2,9);
 function mk(type,x,y,config){return{id:nid(),type,position:{x,y},config:config||{}}}
@@ -495,7 +481,7 @@ const worstSeverity=fs=>fs.reduce((a,f)=>SEV_RANK[f.severity]<SEV_RANK[a]?f.seve
 function nodeError(n,s){const o=s.output||{};
   if(n.type==="notify"&&o.errorCode)return WEBHOOK_ERRORS[o.errorCode]||(o.statusCode?`Получатель вернул HTTP ${o.statusCode}.`:s.error);
   return s.error==="Node execution failed."?"Нода завершилась с ошибкой.":s.error||"Нода завершилась с ошибкой."}
-function nodeIssues(n){const s=report?.nodes.find(x=>x.nodeId===n.id);if(!s||s.status==="running"||s.status==="queued")return null;
+function nodeIssues(n){const s=historicalReport?null:report?.nodes.find(x=>x.nodeId===n.id);if(!s||s.status==="running"||s.status==="queued")return null;
   const o=s.output||{},res={level:null,error:"",items:[],count:0};
   if(s.status==="failed"){res.level="bad";res.error=nodeError(n,s)}
   else if(n.type==="ai"&&o.aiAvailable===false){res.level="warn";res.error=(LLM_ERRORS[o.errorCode]||"Модель недоступна.")+(o.fallback?" Карточки собраны без нейросети.":"")}
@@ -507,7 +493,7 @@ function nodeIssues(n){const s=report?.nodes.find(x=>x.nodeId===n.id);if(!s||s.s
         if(!buckets.has(key))buckets.set(key,{g,rule:f.ruleId,message:f.message,findings:[]});buckets.get(key).findings.push(f)}
       res.items=[...buckets.values()].map(b=>({...b,severity:worstSeverity(b.findings)})).sort((a,b)=>SEV_RANK[a.severity]-SEV_RANK[b.severity])}}
   return res.level?res:null}
-function nodeIssuesBlock(){if(!report||sel?.t!=="n")return"";const n=wf.nodes.find(x=>x.id===sel.id);if(!n)return"";
+function nodeIssuesBlock(){if(historicalReport||!report||sel?.t!=="n")return"";const n=wf.nodes.find(x=>x.id===sel.id);if(!n)return"";
   const s=report.nodes.find(x=>x.nodeId===n.id);if(!s||n.type==="trigger"||n.type==="condition")return"";
   const iss=nodeIssues(n);
   if(!iss)return s.status==="succeeded"?`<div class="node-issues ok"><h4>${esc(nodeName(n))}: проблем не найдено</h4></div>`:"";
@@ -520,7 +506,7 @@ function nodeIssuesBlock(){if(!report||sel?.t!=="n")return"";const n=wf.nodes.fi
 function render(){
   const bd=$("#board");bd.querySelectorAll(".node").forEach(e=>e.remove());
   for(const n of wf.nodes){const e=document.createElement("div");e.className="node";e.dataset.id=n.id;
-    const s=report?.nodes.find(x=>x.nodeId===n.id)?.status;if(s)e.classList.add("s-"+s);
+    const s=historicalReport?null:report?.nodes.find(x=>x.nodeId===n.id)?.status;if(s)e.classList.add("s-"+s);
     const iss=nodeIssues(n);if(iss){e.classList.add("alert-"+iss.level);e.title="Нажмите, чтобы увидеть, что не так"}
     const p=ports(n),note=n.config?.note;
     e.innerHTML=`<span class="bar" style="background:${nodeColor(n)}"></span><b>${esc(nodeName(n))}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается"}</div>`+
@@ -532,40 +518,80 @@ function render(){
       return`<span class="h ${cls}" data-out="${esc(n.id)}" data-hd="${h||""}" style="top:${portY(n,i+1,p.outs)-7}px" title="${label}"></span>`}).join("");
     e.style.height=nodeHeight(n)+"px";
     if(sel?.t==="n"&&sel.id===n.id)e.classList.add("sel");
-    e.style.left=n.position.x+"px";e.style.top=n.position.y+"px";bd.appendChild(e)}
+    placeNode(e,n);bd.appendChild(e)}
   edges();inspector();if(report&&$("#repBody").dataset.issuesFor!==(sel?.t==="n"?sel.id:""))renderRep()}
+function placeNode(element,node){
+  element.style.setProperty("--node-x",node.position.x+"px");
+  element.style.setProperty("--node-y",node.position.y+"px")
+}
 function pt(n,out,h){const p=n.position,c=ports(n);return out?[p.x+190,p.y+portY(n,handleIndex(n,h,1),c.outs)]:[p.x,p.y+portY(n,handleIndex(n,h,0),c.ins)]}
-function edges(tmp){const sv=$("#edges");let h="";
+function edges(tmp){const sv=$("#edgeLayer");let h="";
   for(const e of wf.edges){const a=wf.nodes.find(n=>n.id===e.source),b=wf.nodes.find(n=>n.id===e.target);if(!a||!b)continue;
     const[x1,y1]=pt(a,1,e.sourceHandle),[x2,y2]=pt(b,0,e.targetHandle),dx=Math.max(40,(x2-x1)/2);
-    const act=report&&report.nodes.find(x=>x.nodeId===e.target)?.status==="succeeded";
+    const act=!historicalReport&&report?.nodes.find(x=>x.nodeId===e.target)?.status==="succeeded";
     h+=`<path data-e="${esc(e.id)}" class="${sel?.t==="e"&&sel.id===e.id?"on":""} ${act?"act":""}" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}"/>`;
     if(e.sourceHandle)h+=`<text x="${x1+8}" y="${y1-6}">${e.sourceHandle==="true"?"да":e.sourceHandle==="false"?"нет":e.sourceHandle.slice(3)}</text>`}
   if(tmp)h+=`<path d="M${tmp[0]},${tmp[1]} L${tmp[2]},${tmp[3]}" style="stroke-dasharray:5 4;pointer-events:none"/>`;sv.innerHTML=h}
 function cycle(s,t){const seen=new Set();const go=id=>{if(id===s)return true;if(seen.has(id))return false;seen.add(id);return wf.edges.filter(e=>e.source===id).some(e=>go(e.target))};return go(t)}
 const bd=$("#board");
+function setPan(x,y){
+  pan.x=Math.round(x);pan.y=Math.round(y);
+  bd.style.setProperty("--pan-x",pan.x+"px");bd.style.setProperty("--pan-y",pan.y+"px");
+  $("#canvas").style.backgroundPosition=`${pan.x%22}px ${pan.y%22}px`
+}
+function visibleCanvas(){
+  const width=bd.clientWidth,main=$("#main");
+  const left=main.classList.contains("lib-open")?$("#left").offsetWidth:0;
+  const right=main.classList.contains("ai-open")?$("#right").getBoundingClientRect().left-bd.getBoundingClientRect().left:width;
+  return right-left>=220?{left,right}:{left:0,right:width}
+}
+function focusCanvas(){
+  if(!wf.nodes.length)return setPan(0,0);
+  const x=Math.min(...wf.nodes.map(n=>n.position.x));
+  const y=Math.min(...wf.nodes.map(n=>n.position.y));
+  setPan(visibleCanvas().left+40-x,60-y)
+}
+$("#canvasHome").onclick=focusCanvas;
+function trackPointer(start,move,finish){
+  const mv=e=>{if(e.pointerId===start.pointerId)move(e)};
+  const end=e=>{if(e.pointerId!==start.pointerId)return;
+    removeEventListener("pointermove",mv);removeEventListener("pointerup",end);removeEventListener("pointercancel",end);
+    finish(e)
+  };
+  addEventListener("pointermove",mv);addEventListener("pointerup",end);addEventListener("pointercancel",end)
+}
+bd.addEventListener("wheel",e=>{if(e.ctrlKey||e.metaKey)return;e.preventDefault();
+  const scale=e.deltaMode===1?16:e.deltaMode===2?bd.clientHeight:1;
+  setPan(pan.x-e.deltaX*scale,pan.y-e.deltaY*scale)
+},{passive:false});
 bd.addEventListener("pointerdown",ev=>{
+  if(ev.button!==0)return;
+  const o=ev.target.closest("[data-out]"),nd=ev.target.closest(".node"),ep=ev.target.closest("[data-e]");
+  if(!nd&&!ep){
+    ev.preventDefault();sel=null;render();bd.classList.add("panning");
+    const x=pan.x-ev.clientX,y=pan.y-ev.clientY;
+    trackPointer(ev,e=>setPan(x+e.clientX,y+e.clientY),()=>bd.classList.remove("panning"));return
+  }
   if(running)return;
-  const o=ev.target.closest("[data-out]"),nd=ev.target.closest(".node");const r=bd.getBoundingClientRect();
+  const r=bd.getBoundingClientRect();
   if(o){ev.preventDefault();const src=wf.nodes.find(n=>n.id===o.dataset.out),hd=o.dataset.hd||undefined,[x1,y1]=pt(src,1,hd);
-    const mv=e=>edges([x1,y1,e.clientX-r.left,e.clientY-r.top]);
-    const up=e=>{removeEventListener("pointermove",mv);removeEventListener("pointerup",up);edges();
+    const mv=e=>edges([x1,y1,e.clientX-r.left-pan.x,e.clientY-r.top-pan.y]);
+    const up=e=>{edges();if(e.type==="pointercancel")return;
       const t=document.elementFromPoint(e.clientX,e.clientY)?.closest("[data-in]");if(!t)return;const tid=t.dataset.in,hi=t.dataset.hi||undefined;
       if(tid===src.id)return toast("Нельзя соединить ноду с самой собой");
       if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&x.sourceHandle===hd&&x.targetHandle===hi))return toast("Такая связь уже есть");
       if(cycle(src.id,tid))return toast("Циклы запрещены: связь замкнёт сценарий");
       wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{}),...(hi?{targetHandle:hi}:{})});clearReport()};
-    addEventListener("pointermove",mv);addEventListener("pointerup",up);return}
+    trackPointer(ev,mv,up);return}
   if(nd&&!ev.target.closest("[data-in]")){const n=wf.nodes.find(x=>x.id===nd.dataset.id);sel={t:"n",id:n.id};
-    const ox=ev.clientX-n.position.x,oy=ev.clientY-n.position.y;
-    const mv=e=>{n.position.x=Math.max(0,Math.round(e.clientX-ox));n.position.y=Math.max(0,Math.round(e.clientY-oy));nd.style.left=n.position.x+"px";nd.style.top=n.position.y+"px";edges()};
-    const up=()=>{removeEventListener("pointermove",mv);removeEventListener("pointerup",up);render()};
-    addEventListener("pointermove",mv);addEventListener("pointerup",up);document.querySelectorAll(".node.sel").forEach(x=>x.classList.remove("sel"));nd.classList.add("sel");inspector();
+    const ox=ev.clientX-pan.x-n.position.x,oy=ev.clientY-pan.y-n.position.y;
+    const mv=e=>{n.position.x=Math.round(e.clientX-pan.x-ox);n.position.y=Math.round(e.clientY-pan.y-oy);placeNode(nd,n);edges()};
+    trackPointer(ev,mv,render);document.querySelectorAll(".node.sel").forEach(x=>x.classList.remove("sel"));nd.classList.add("sel");inspector();
     if(report&&nodeIssues(n))openRep();return}
-  const ep=ev.target.closest("[data-e]");if(ep){sel={t:"e",id:ep.dataset.e};render();return}
+  if(ep){sel={t:"e",id:ep.dataset.e};render();return}
   sel=null;render()});
 addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
-function clearReport(){report=null;pick=null;render();renderRep();renderAI()}
+function clearReport(){report=null;historicalReport=false;pick=null;render();renderRep();renderAI()}
 function del(){if(!sel||running)return;if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
 let webhookRefs=[],webhookListError="";
 function webhookInspector(selected){
@@ -588,17 +614,17 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
       <div><label class="f">Выходов</label><select data-c="outputs">${[0,1,2,3,4].map(v=>`<option ${v===+c.outputs?"selected":""}>${v}</option>`).join("")}</select></div></div>
       <label class="f">Цвет</label><div class="swatches">${NODE_COLORS.map(col=>`<button type="button" data-col="${col}" class="${col===c.color?"on":""}" style="background:${col}" aria-label="Цвет ${col}"></button>`).join("")}<input type="color" data-c="color" value="${isColor(c.color)?c.color:"#68766d"}" aria-label="Свой цвет"></div>
       <p class="note">Передаёт находки со входов на все выходы. Лишние связи при уменьшении портов удаляются.</p>`;
-    if(n.type==="trigger")h+=`<label class="f">Режим</label><select data-k="mode"><option value="manual">Вручную</option><option value="schedule" disabled>По расписанию (скоро)</option></select><p class="note">Источник берётся из панели «Проект».</p>`;
-    else if(n.type==="condition")h+=`<label class="f">Если есть находка не ниже</label><select data-k="minSeverity">${SEV.map(s=>`<option value="${s}">${SEVRU[s]}</option>`).join("")}</select><p class="note">Выход «да» срабатывает при совпадении, иначе «нет». Сравнения и regex появятся позже.</p>`;
-    else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в .kt, .kts, .java, .properties, .yml, .json, .toml и .env. Значения секретов в отчёт не попадают.</p>`;
-    else if(n.type==="sca")h+=`<p class="note">Сверяет версии Gradle с Maven-справочником. Загрузите полный учебный архив со справочником или настройте справочник на бэкенде.</p>`;
+    if(n.type==="trigger")h+=`<p class="note">Нажмите «Запустить», чтобы проверить проект, выбранный над холстом.</p>`;
+    else if(n.type==="condition")h+=`<label class="f" for="minSeverity">Минимальная критичность</label><select id="minSeverity" data-k="minSeverity">${SEV.map(s=>`<option value="${s}">${SEVRU[s]}</option>`).join("")}</select><p class="note">Выход «Да» срабатывает, если есть хотя бы одна находка этой критичности или выше. В остальных случаях срабатывает «Нет».</p>`;
+    else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в коде и конфигурации. В отчёте указывает файл и строку без значения секрета.</p>`;
+    else if(n.type==="sca")h+=`<p class="note">Сверяет версии зависимостей Gradle со справочником Maven. Справочник берётся из архива или из настроек сервера.</p>`;
     else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin-код на ошибки в SQL, настройках TLS и CORS, правилах доступа к маршрутам и записям.</p>`;
-    else if(n.type==="ai")h+=`<p class="note">Объясняет находки из входящих связей и предлагает исправления. Модель выбирается на бэкенде (локальная или DeepSeek). Новых находок AI не добавляет. Если модель недоступна, находки пойдут дальше без рекомендаций.</p>`;
+    else if(n.type==="ai")h+=`<p class="note">Объясняет находки и предлагает исправления. Модель выбирается в настройках редактора. При сбое модели отчёт показывает подсказки по правилам сканеров.</p>`;
     else if(n.type==="notify")h+=webhookInspector(c.webhookRef);
     else if(n.type==="custom");  // настройки своей ноды выведены выше
     else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
-    if(n.type!=="trigger")h+=`<label class="f" for="nodeNote">Текст в ноде</label><textarea id="nodeNote" maxlength="1000" placeholder="Заметка: что проверить, кто отвечает">${esc(c.note||"")}</textarea>
-      <button class="btn" id="saveTpl" style="margin-top:8px">Сохранить ноду в «Сохранённые»</button>`;
+    if(n.type!=="trigger")h+=`<label class="f" for="nodeNote">Заметка</label><textarea id="nodeNote" maxlength="1000" placeholder="Что проверить или кто отвечает">${esc(c.note||"")}</textarea>
+      <button class="btn" id="saveTpl" style="margin-top:8px">Сохранить ноду в библиотеку</button>`;
     h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
   box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
   box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id);el.value=n.config[el.dataset.k]??({minSeverity:"high",mode:"manual"}[el.dataset.k]||"");
@@ -628,7 +654,16 @@ let tab="cat";
 let libTab="std",templates=[];
 function addNode(type,config){if(running)return toast("Дождитесь завершения проверки");
   if(type==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
-  const n=mk(type,60+(wf.nodes.length%5)*30,260+(wf.nodes.length%4)*50,config);wf.nodes.push(n);sel={t:"n",id:n.id};clearReport()}
+  const n=mk(type,0,0,config),height=nodeHeight(n);
+  const view=visibleCanvas();
+  const x=Math.round((view.left+view.right)/2-pan.x-95),y=Math.round(bd.clientHeight/2-pan.y-height/2);
+  n.position={x,y};
+  while(wf.nodes.some(existing=>Math.abs(existing.position.x-x)<206&&
+    n.position.y<existing.position.y+nodeHeight(existing)+16&&n.position.y+height+16>existing.position.y)){
+    n.position.y+=height+16
+  }
+  if(n.position.y+pan.y+height>bd.clientHeight)setPan(pan.x,Math.round(bd.clientHeight/2-n.position.y-height/2));
+  wf.nodes.push(n);sel={t:"n",id:n.id};clearReport()}
 function portsText(c){return`${plural(+c.inputs||1,"вход","входа","входов")}, ${plural(+c.outputs||0,"выход","выхода","выходов")}`}
 function left(){const l=$("#leftList");
   if(tab==="my")return loadMy();
@@ -663,7 +698,7 @@ $("#cnCreate").onclick=async()=>{const title=$("#cnTitle").value.trim();if(!titl
 async function loadMy(){const l=$("#leftList");l.innerHTML=`<div class="empty">Загрузка…</div>`;
   try{const list=await api("/workflows");
     l.innerHTML=`<p class="note" style="margin:0 0 4px">Общее рабочее пространство: сценарии видны всей команде.</p>`+(list.length?list.map((s,i)=>`<button class="cat" data-i="${i}">${esc(s.name)}</button>`).join(""):`<div class="empty">Сохранённых сценариев пока нет. Откройте «Файл» → «Сохранить».</div>`);
-    l.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{if(running)return toast("Дождитесь завершения проверки");wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});$("#wfName").value=wf.name;sel=null;clearReport()})}
+    l.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{if(running)return toast("Дождитесь завершения проверки");wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()})}
   catch(e){l.innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{tab=b.dataset.t;document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));left()});
 // сохранение
@@ -673,15 +708,16 @@ $("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("o
 addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
 $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a;
   if(running&&a!=="dl")return toast("Дождитесь завершения проверки");
-  if(a==="new"){wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};$("#wfName").value=wf.name;sel=null;clearReport()}
+  if(a==="new"){wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()}
   if(a==="dl"){const{id,...d}=wf;d.name=$("#wfName").value;$("#jsonOut").value=JSON.stringify(d,null,2);$("#ovJson").classList.add("open")}
   if(a==="save"){try{await save();toast("Сценарий сохранён");if(tab==="my")left()}catch(e){fail(e)}}});
 $("#jsonCopy").onclick=async()=>{try{await navigator.clipboard.writeText($("#jsonOut").value);toast("JSON скопирован")}catch(e){$("#jsonOut").select();toast("Выделено — скопируйте вручную")}};
-$("#jsonDownload").onclick=()=>{
-  const url=URL.createObjectURL(new Blob([$("#jsonOut").value],{type:"application/json"}));
-  const link=document.createElement("a");link.href=url;link.download="workflow.json";link.click();
+function downloadJson(filename,text){
+  const url=URL.createObjectURL(new Blob([text],{type:"application/json;charset=utf-8"}));
+  const link=document.createElement("a");link.href=url;link.download=filename;link.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000)
-};
+}
+$("#jsonDownload").onclick=()=>downloadJson("workflow.json",$("#jsonOut").value);
 document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>b.closest(".ov").classList.remove("open"));
 // связь с бэкендом и настройки
 async function loadWebhookRefs(){
@@ -747,20 +783,41 @@ $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/
 $("#theme").onclick=()=>{const d=document.documentElement,dark=d.dataset.theme?d.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;d.dataset.theme=dark?"light":"dark"};
 $("#aiToggle").onclick=()=>$("#main").classList.remove("ai-open");
 // источник
-$("#fileIn").onchange=()=>{
-  sourceId=null;
-  const f=$("#fileIn").files[0];
-  $("#srcTag").textContent=f?"выбран: "+f.name:"источник не выбран";
-  $("#srcTag").classList.remove("ok");
-  if(!running)clearReport()
+let sourceLoading=false;
+const REPO_ERRORS={
+  invalid_repository_url:"Укажите HTTPS-ссылку на репозиторий GitHub в формате github.com/владелец/репозиторий.",
+  repository_not_allowed:"Репозиторий не входит в список разрешённых учебных проектов.",
+  repository_unavailable:"Репозиторий недоступен. Нужен публичный репозиторий с веткой по умолчанию.",
+  repository_timeout:"GitHub не успел отдать архив. Попробуйте ещё раз.",
+  repository_download_failed:"Не удалось получить ZIP-архив от GitHub."
 };
-$("#upBtn").onclick=async()=>{const f=$("#fileIn").files[0];
-  if(!f)return toast("Выберите ZIP-архив с учебным проектом");
+async function loadSource(path,options,label){
+  if(running||sourceLoading)return;
+  const tag=$("#srcTag"),previous=tag.textContent;
+  sourceLoading=true;$("#upBtn").disabled=true;$("#repoBtn").disabled=true;
+  tag.textContent="Загружаем проект…";
+  try{
+    const result=await api(path,{method:"POST",...options});
+    sourceId=result.sourceId;tag.textContent="загружен: "+label;
+    tag.classList.add("ok");$("#src").classList.remove("need");clearReport()
+  }catch(e){tag.textContent=previous;toast(REPO_ERRORS[e.code]||e.message)}
+  finally{sourceLoading=false;$("#upBtn").disabled=false;$("#repoBtn").disabled=false}
+}
+$("#upBtn").onclick=()=>{if(!running&&!sourceLoading)$("#fileIn").click()};
+$("#fileIn").onchange=()=>{
+  const f=$("#fileIn").files[0];$("#fileIn").value="";
+  if(!f)return;
   if(!/\.zip$/i.test(f.name))return toast("Поддерживается только ZIP");
   if(f.size>10*1024*1024)return toast(ERR.upload_too_large);
-  const fd=new FormData();fd.append("file",f);$("#upBtn").disabled=true;
-  try{const r=await api("/sources",{method:"POST",body:fd});if($("#fileIn").files[0]!==f)return;sourceId=r.sourceId;$("#srcTag").textContent="загружен: "+f.name;$("#srcTag").classList.add("ok");$("#src").classList.remove("need");toast("Проект загружен")}
-  catch(e){fail(e)}finally{$("#upBtn").disabled=false}};
+  const body=new FormData();body.append("file",f);
+  loadSource("/sources",{body},f.name)
+};
+$("#repoBtn").onclick=()=>{
+  const url=$("#repoUrl").value.trim();
+  if(!url){$("#repoUrl").focus();return toast("Введите ссылку на учебный репозиторий")}
+  loadSource("/sources/repository",{headers:JH,body:JSON.stringify({url})},url.replace(/^https:\/\/github\.com\//i,""))
+};
+$("#repoUrl").onkeydown=e=>{if(e.key==="Enter")$("#repoBtn").click()};
 // запуск
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length!==1)return"В сценарии должен быть ровно один запуск";
@@ -770,12 +827,13 @@ function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length
   if(wf.nodes.some(n=>n.type==="notify"&&!n.config.webhookRef))return WEBHOOK_ERRORS.invalid_webhook_ref;
   return null}
 $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)return toast(err);
-  if(!sourceId){$("#src").classList.add("need");return toast("Сначала загрузите проект: ZIP-архив")}
+  if(sourceLoading)return toast("Дождитесь загрузки проекта");
+  if(!sourceId){$("#src").classList.add("need");return toast("Загрузите учебный ZIP или репозиторий по ссылке")}
   const runSource=sourceId;
   running=true;$("#runBtn").disabled=true;$("#runBtn").textContent="Идёт запуск…";pick=null;inspector();renderChat();
   try{await save();
     const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource,...modelChoice()})});
-    report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};openRep();render();renderRep();renderAI();
+    historicalReport=false;report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};openRep();render();renderRep();renderAI();
     for(let i=0;i<150;i++){await wait(800);report=await api("/runs/"+r.runId);report.findings=report.findings||[];render();renderRep();renderAI();if(report.status==="succeeded"||report.status==="failed")break}
     if(report.status==="running"||report.status==="queued")toast("Запуск идёт дольше обычного. Откройте отчёт позже: "+r.runId)}
   catch(e){fail(e)}
@@ -783,6 +841,68 @@ $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)ret
 // отчёт
 function openRep(){$("#rep").classList.remove("min");$("#repToggle").textContent="Свернуть"}
 $("#repToggle").onclick=()=>{$("#rep").classList.toggle("min");$("#repToggle").textContent=$("#rep").classList.contains("min")?"Развернуть":"Свернуть"};
+const HISTORY_PAGE_SIZE=25;
+const historyTime=new Intl.DateTimeFormat("ru",{dateStyle:"short",timeStyle:"short"});
+let historyView=null;
+function historyIsOpen(view){
+  return historyView===view&&$("#ovHistory").classList.contains("open")&&wf.id===view.workflowId
+}
+async function loadHistory(view){
+  const list=$("#historyList"),more=$("#historyMore");
+  more.disabled=true;
+  try{
+    const rows=await api(`/workflows/${encodeURIComponent(view.workflowId)}/runs?limit=${HISTORY_PAGE_SIZE+1}&offset=${view.offset}`);
+    if(!historyIsOpen(view))return;
+    if(view.offset===0)list.replaceChildren();
+    if(!rows.length&&view.offset===0)list.textContent="У этого сценария пока нет запусков.";
+    for(const run of rows.slice(0,HISTORY_PAGE_SIZE)){
+      if(view.seen.has(run.runId))continue;
+      view.seen.add(run.runId);
+      const button=document.createElement("button");
+      button.className="cat";
+      const time=run.createdAt?historyTime.format(new Date(run.createdAt)):"Дата не записана";
+      button.textContent=`${time} · ${run.runId.slice(0,8)} · ${stLabel(run.status)} · ${plural(run.findingCount,"находка","находки","находок")}`;
+      button.onclick=()=>openHistoryReport(view,run.runId,button);
+      list.appendChild(button)
+    }
+    view.offset+=Math.min(rows.length,HISTORY_PAGE_SIZE);
+    more.hidden=rows.length<=HISTORY_PAGE_SIZE
+  }catch(e){if(historyIsOpen(view)){if(view.offset===0)list.textContent=e.message;else fail(e)}}
+  finally{if(historyIsOpen(view))more.disabled=false}
+}
+async function openHistoryReport(view,runId,button){
+  if(running||view.opening)return;
+  view.opening=true;button.disabled=true;
+  try{
+    const saved=await api("/runs/"+encodeURIComponent(runId));
+    if(!historyIsOpen(view)||running)return;
+    if(saved.status==="queued"||saved.status==="running")return toast("Запуск ещё выполняется. Откройте отчёт после завершения.");
+    report=saved;historicalReport=true;pick=null;sel=null;
+    $("#ovHistory").classList.remove("open");openRep();render();renderRep();renderAI()
+  }catch(e){if(historyIsOpen(view))fail(e)}
+  finally{view.opening=false;button.disabled=false}
+}
+$("#runHistory").onclick=()=>{
+  if(running)return toast("Дождитесь завершения проверки");
+  if(!wf.id)return toast("Сначала сохраните сценарий или запустите проверку");
+  historyView={workflowId:wf.id,offset:0,opening:false,seen:new Set()};
+  $("#historyWorkflow").textContent=wf.name;
+  $("#historyList").textContent="Загружаем историю…";
+  $("#historyMore").hidden=true;$("#ovHistory").classList.add("open");
+  loadHistory(historyView)
+};
+$("#historyMore").onclick=()=>loadHistory(historyView);
+$("#findingsDownload").onclick=async event=>{
+  const button=event.currentTarget;
+  const runId=report?.runId;
+  if(!runId||button.hidden)return;
+  button.disabled=true;
+  try{
+    const findings=await api("/runs/"+encodeURIComponent(runId)+"/findings.json");
+    downloadJson("findings.json",JSON.stringify(findings,null,2)+"\n")
+  }catch(e){fail(e)}
+  finally{button.disabled=false}
+};
 function nodeNote(n,s){const o=s.output;
   if(n.type==="notify"&&o){
     if(o.delivered)return `<br><small>Отправлено (HTTP ${esc(o.statusCode)})</small>`;
@@ -838,15 +958,20 @@ function renderFindings(findings, openGroups) {
   }).join("");
 }
 
-function renderRep(){const b=$("#repBody");if(!report){delete b.dataset.runId;$("#repTag").textContent="запусков ещё не было";b.innerHTML=`<div class="empty">Загрузите проект и нажмите «Запустить» — здесь появятся статусы нод и находки.</div>`;return}
-  $("#repTag").textContent=report.runId.slice(0,8)+" · "+stLabel(report.status);
+function renderRep(){const b=$("#repBody");$("#findingsDownload").hidden=!report||!["succeeded","failed"].includes(report.status);
+  if(!report){delete b.dataset.runId;$("#repTag").textContent="запусков ещё не было";b.innerHTML=`<div class="empty">Загрузите проект и нажмите «Запустить» — здесь появятся статусы нод и находки.</div>`;return}
+  $("#repTag").textContent=(historicalReport?"Из истории · ":"")+report.runId.slice(0,8)+" · "+stLabel(report.status);
   const fs=report.findings||[];
   const sameRun=b.dataset.runId===report.runId;
   const openGroups=new Set(sameRun?Array.from(b.querySelectorAll("details[open]"),e=>e.dataset.group):[]);
   const scrollTop=sameRun?b.scrollTop:0;
   b.dataset.runId=report.runId;
   b.dataset.issuesFor=sel?.t==="n"?sel.id:"";
-  b.innerHTML=nodeIssuesBlock()+`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{const n=wf.nodes.find(x=>x.id===s.nodeId);return n?`<div><span>${esc(nodeName(n))}${nodeNote(n,s)}</span><small>${stLabel(s.status)}</small></div>`:""}).join("")}</div></div>
+  b.innerHTML=nodeIssuesBlock()+`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{
+    const n=s.type?{type:s.type,config:{title:s.label}}:wf.nodes.find(x=>x.id===s.nodeId);
+    const name=n?nodeName(n):s.nodeId;
+    return `<div><span>${esc(name)}${n?nodeNote(n,s):""}</span><small>${stLabel(s.status)}</small></div>`
+  }).join("")}</div></div>
   <div><h4>Находки (${fs.length})</h4>${renderFindings(fs,openGroups)}</div>`;
   b.scrollTop=scrollTop;
   b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{
@@ -966,39 +1091,16 @@ function renderAI(){const b=$("#aiBody"),a=report?.aiAnalysis;
 $("#wfName").oninput=e=>wf.name=e.target.value;
 init();left();render();renderRep();renderAI();ping().then(ok=>ok&&loadLlm());
 
-// ===== оформление по макету: панели, библиотека, вход =====
+// Панели и библиотека
 (()=>{
-  const main=$("#main"),store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{v==null?localStorage.removeItem(k):localStorage.setItem(k,v)}catch(e){}}};
+  const main=$("#main");
   if(innerWidth<=900)main.classList.remove("ai-open");
   const lib=()=>{const o=main.classList.toggle("lib-open");$("#libBtn").setAttribute("aria-expanded",String(o))};
   $("#libBtn").onclick=lib;$("#libTab").onclick=lib;
   $("#chatFab").onclick=()=>{main.classList.add("ai-open");$("#chatIn").focus()};
   document.querySelector('[data-a="zip"]').addEventListener("click",()=>{if(!running)$("#fileIn").click()});
-  $("#fileIn").addEventListener("change",()=>{if($("#fileIn").files[0]&&!running)$("#upBtn").click()});
-  ["ovSet","ovJson"].forEach(id=>{const o=$("#"+id);o.addEventListener("pointerdown",e=>{if(e.target===o)o.classList.remove("open")})});
-  addEventListener("keydown",e=>{if(e.key==="Escape"){document.querySelectorAll(".ov.open").forEach(o=>o.classList.remove("open"));$("#auth").classList.remove("open")}});
-  // вход и регистрация: только интерфейс, бэкенд аккаунтов пока не поддерживает
-  let mode="register",user=null;try{user=JSON.parse(store.get("cg_user")||"null")}catch(e){}
-  const err=m=>$("#authErr").textContent=m||"";
-  function setMode(m){mode=m;const reg=m==="register";document.querySelectorAll("#auth [data-reg]").forEach(e=>e.hidden=!reg);
-    $("#authTitle").textContent=reg?"Регистрация":"Вход";$("#authMain").textContent=reg?"Зарегистрироваться":"Войти";$("#authAlt").textContent=reg?"Войти":"Создать аккаунт";
-    $("#auPass").autocomplete=reg?"new-password":"current-password";err("")}
-  function showUser(){$("#userBtn").textContent=user?user.name:"Войти";$("#userBtn").title=user?"Выйти из профиля":""}
-  function openAuth(m){setMode(m);$("#auth").classList.add("open");$("#authForm").reset();($(m==="register"?"#auName":"#auMail")).focus()}
-  $("#userBtn").onclick=()=>{if(user){user=null;store.set("cg_user",null);showUser();toast("Вы вышли из профиля")}else openAuth("login")};
-  $("#authAlt").onclick=()=>{mode==="register"?setMode("login"):setMode("register");$("#authForm").reset()};
-  $("#authSkip").onclick=()=>$("#auth").classList.remove("open");
-  $("#authForm").onsubmit=e=>{e.preventDefault();const mail=$("#auMail").value.trim(),pass=$("#auPass").value;
-    if(mode==="register"){const name=$("#auName").value.trim();
-      if(name.length<2)return err("Введите имя пользователя (от 2 символов)");
-      if(!/^\S+@\S+\.\S+$/.test(mail))return err("Введите корректную почту");
-      if(pass.length<6)return err("Пароль — минимум 6 символов");
-      if(pass!==$("#auPass2").value)return err("Пароли не совпадают");
-      user={name,email:mail}}
-    else{if(!/^\S+@\S+\.\S+$/.test(mail))return err("Введите корректную почту");if(!pass)return err("Введите пароль");
-      user={name:user&&user.email===mail?user.name:mail.split("@")[0],email:mail}}
-    store.set("cg_user",JSON.stringify(user));showUser();$("#auth").classList.remove("open");toast(mode==="register"?"Профиль создан":"Вы вошли")};
-  showUser();
+  ["ovSet","ovJson","ovHistory"].forEach(id=>{const o=$("#"+id);o.addEventListener("pointerdown",e=>{if(e.target===o)o.classList.remove("open")})});
+  addEventListener("keydown",e=>{if(e.key==="Escape")document.querySelectorAll(".ov.open").forEach(o=>o.classList.remove("open"))});
 })();
 </script>
 </body>

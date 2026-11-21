@@ -76,7 +76,8 @@ def find_secrets(data: bytes) -> list[Finding]:
         suffix = path.suffix.lower()
         lines = content.splitlines()
         matched_lines = {
-            number for number, line in enumerate(lines, start=1) if has_secret_assignment(line, suffix)
+            number: kind for number, line in enumerate(lines, start=1)
+            if (kind := secret_assignment_class(line, suffix))
         }
         if suffix in {".kt", ".kts"}:
             matched_lines.update(kotlin_secret_lines(lines))
@@ -85,6 +86,7 @@ def find_secrets(data: bytes) -> list[Finding]:
                 id=uuid4().hex,
                 scanner="secrets",
                 ruleId="hardcoded-secret",
+                secretClass=matched_lines[line_number],
                 file=path.as_posix(),
                 line=line_number,
                 severity="high",
@@ -93,29 +95,38 @@ def find_secrets(data: bytes) -> list[Finding]:
     return findings
 
 
-def has_secret_assignment(line: str, suffix: str) -> bool:
+def secret_assignment_class(line: str, suffix: str) -> str | None:
     if suffix not in CODE_SUFFIXES:
         authorization = AUTHORIZATION_VALUE.match(line)
         if authorization and "$" not in authorization[1]:
-            return True
+            return "configuration-token"
 
     match = SECRET_ASSIGNMENT.match(line)
     if not match:
-        return False
+        return None
     raw_value = match["value"]
     value = raw_value.rstrip(";").strip("\"'")
     quoted = raw_value.startswith(("\"", "'"))
-    return bool(value) and not value.startswith("$") and (quoted or (suffix not in CODE_SUFFIXES and "(" not in value))
+    if not value or value.startswith("$") or (not quoted and (suffix in CODE_SUFFIXES or "(" in value)):
+        return None
+    key = re.sub(r"[-_.]", "", match["key"].lower())
+    if key.endswith(("password", "passwd")):
+        return "password"
+    if key.endswith("apikey"):
+        return "api-key"
+    if suffix not in CODE_SUFFIXES and key.endswith("token"):
+        return "configuration-token"
+    return "hardcoded-secret"
 
 
-def kotlin_secret_lines(lines: list[str]) -> Iterator[int]:
+def kotlin_secret_lines(lines: list[str]) -> Iterator[tuple[int, str]]:
     local_strings: dict[str, int] = {}
     for number, line in enumerate(lines, start=1):
         if line.lstrip().startswith(("//", "*", "/*")):
             local_strings.clear()
             continue
         if KOTLIN_ENV_FALLBACK.search(line):
-            yield number
+            yield number, "secret-fallback"
 
         declaration = KOTLIN_LOCAL.match(line)
         if declaration:
@@ -127,7 +138,7 @@ def kotlin_secret_lines(lines: list[str]) -> Iterator[int]:
                 parts = [part.strip() for part in value.split("+")]
                 bearer = KOTLIN_BEARER.search(lines[number])
                 if bearer and bearer[1] == name and all(part in local_strings for part in parts):
-                    yield min(local_strings[part] for part in parts)
+                    yield min(local_strings[part] for part in parts), "recoverable-token"
             continue
         if line.strip():
             local_strings.clear()

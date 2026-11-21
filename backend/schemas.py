@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, JsonValue, StringConstraints
@@ -59,6 +60,10 @@ class SourceCreated(BaseModel):
     sourceId: Identifier
 
 
+class RepositorySourceRequest(BaseModel):
+    url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+
+
 ModelId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
 
@@ -91,6 +96,7 @@ class Finding(BaseModel):
     group: str | None = None
     artifact: str | None = None
     version: str | None = None
+    secretClass: str | None = None
 
 
 class Recommendation(BaseModel):
@@ -169,6 +175,8 @@ class LlmCheckResult(BaseModel):
 
 class NodeResult(BaseModel):
     nodeId: Identifier
+    label: str | None = None
+    type: NodeType | None = None
     status: NodeStatus = "queued"
     output: dict[str, JsonValue] | None = None
     error: str | None = None
@@ -177,10 +185,18 @@ class NodeResult(BaseModel):
 class RunReport(BaseModel):
     runId: Identifier
     workflowId: Identifier
+    createdAt: datetime | None = None
     status: RunStatus = "queued"
     nodes: list[NodeResult]
     findings: list[Finding] = Field(default_factory=list)
     aiAnalysis: AiAnalysis | None = None
+
+
+class RunListItem(BaseModel):
+    runId: Identifier
+    status: RunStatus
+    createdAt: datetime | None = None
+    findingCount: int = Field(ge=0)
 
 
 class ApiProblem(Exception):

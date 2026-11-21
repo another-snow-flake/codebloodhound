@@ -303,6 +303,24 @@ class ChatTidyTest(unittest.TestCase):
         self.assertEqual(tidy_reply(reply, selected),
                          "1. UserRepo.kt:21 — склеивание строк в query.\n2. Config.kt:7: секрет.\nИтого\nF9 нет.")
 
+    def test_chat_does_not_show_unverified_citations_after_retry(self):
+        finding_in_report = finding(21, file="src/main/kotlin/UserRepo.kt")
+        bad = "Проверьте src/Imaginary.kt:91 и CVE-2099-12345."
+        reply = answer_report_question([finding_in_report], "Что исправить?", [], FakeClient(bad, bad))
+        self.assertNotIn("Imaginary", reply)
+        self.assertNotIn("CVE-2099-12345", reply)
+        self.assertEqual(tidy_reply("F1 (Fake.kt:91)", [finding_in_report]), "UserRepo.kt:21")
+
+    def test_explainer_retries_unverified_citations_and_accepts_a_matching_location(self):
+        item = finding(21, file="src/main/kotlin/UserRepo.kt")
+        bad, good = answer("G1"), answer("G1")
+        bad["groups"][0]["explanation"] = "Проверьте CVE-2099-12345 в Fake.kt:91."
+        good["groups"][0]["explanation"] = "Проверьте UserRepo.kt:21."
+        model = FakeClient(bad, good)
+        result = explain_findings([item], model, cache=None)
+        self.assertEqual(result.groups[0].explanation, "Проверьте UserRepo.kt:21.")
+        self.assertEqual(len(model.calls), 2)
+
 
 class RunnerAiNodeTest(unittest.TestCase):
     def report(self):

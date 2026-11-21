@@ -232,6 +232,32 @@ def _short_location(finding: Finding) -> str:
     return safe_path(finding.file).rsplit("/", 1)[-1] + (f":{finding.line}" if finding.line else "")
 
 
+ADVISORY_REFERENCE = re.compile(r"\b(?:CVE-\d{4}-\d{4,}|GHSA(?:-[\da-z]{4}){3})\b", re.I)
+FILE_REFERENCE = re.compile(
+    r"(?<![\w./\\…-])(?P<path>(?:[A-Za-z]:[/\\]|[/\\])?(?:[\w.…-]+[/\\])*"
+    r"(?:[\w.-]*\.[A-Za-z][A-Za-z0-9]{0,12}|Dockerfile|Makefile))"
+    r":[ \t]*(?P<line>\d+)(?:[-–](?P<end>\d+))?\b",
+    re.I,
+)
+
+
+def has_unknown_references(text: str, findings: Sequence[Finding]) -> bool:
+    advisories = {value.upper() for finding in findings for value in (finding.cve, finding.advisoryId) if value}
+    if any(reference.upper() not in advisories for reference in ADVISORY_REFERENCE.findall(text)):
+        return True
+    for reference in FILE_REFERENCE.finditer(text.replace("\x60", "")):
+        path = reference["path"].replace("\\", "/")
+        line = reference["line"]
+        end = reference["end"] or line
+        if line != end or not any(
+            line == str(finding.line)
+            and (safe_path(finding.file) == path or safe_path(finding.file).endswith("/" + path))
+            for finding in findings
+        ):
+            return True
+    return False
+
+
 def _describe_group(group: FindingGroup) -> dict:
     first = group.findings[0]
     item = {
@@ -320,11 +346,15 @@ def parse_answer(
         raise LlmError("invalid_response", "The model answer dismisses findings the scanners reported.")
 
     by_ref = {group.ref: group for group in groups}
+    if has_unknown_references(answer.summary, [finding for group in groups for finding in group.findings]):
+        raise LlmError("invalid_response", "Модель указала CVE или файл и строку, которых нет в отчёте.")
     cards: list[AiGroup] = []
     for item in answer.groups:
         group = by_ref.get(item.groupId.strip())
         if group is None or any(card.id == group.ref for card in cards):
             continue
+        if has_unknown_references("\n".join((item.title, item.action, item.explanation)), group.findings):
+            raise LlmError("invalid_response", "Модель указала CVE или файл и строку, которых нет в группе находок.")
         cards.append(AiGroup(
             id=group.ref, title=_title(item.title, group), action=item.action, explanation=item.explanation,
             severity=group.severity, rationale=rationale(group),
@@ -338,6 +368,9 @@ def parse_answer(
 
     suggested_actions = {}
     for item in answer.priorities:
+        group = by_ref.get(item.groupId.strip())
+        if group is not None and has_unknown_references(item.action, group.findings):
+            raise LlmError("invalid_response", "Приоритет ссылается на CVE или место, которых нет в группе находок.")
         suggested_actions.setdefault(item.groupId.strip(), item.action)
 
     recommendations = [
@@ -501,13 +534,18 @@ def answer_report_question(
     problem = None
     if CJK.search(reply) and not CJK.search(question):  # Qwen sometimes slips into Chinese mid-sentence
         problem = "В ответе были китайские иероглифы. Ответь заново только на русском."
+    elif has_unknown_references(tidy_reply(reply, selected), selected):
+        problem = "Используй только CVE, файлы и строки из переданных находок. Ответь заново."
     elif invented := invented_versions(reply, findings):
         problem = (f"В ответе есть версии, которых нет в находках: {', '.join(invented)}. Не называй их: "
                    "напиши, что нужна версия, где закрыты указанные CVE, и её стоит сверить с advisory. Ответь заново.")
     if problem:  # one retry that says what was wrong; small models repeat the slip if asked the same way
         reply = client.complete([*messages, {"role": "assistant", "content": reply}, {"role": "user", "content": problem}],
                                 max_tokens=1024)
-    return tidy_reply(reply, selected)
+    reply = tidy_reply(reply, selected)
+    if has_unknown_references(reply, selected) or invented_versions(reply, findings):
+        return "Модель сослалась на данные, которых нет в отчёте. Уточните вопрос или откройте нужную находку."
+    return reply
 
 
 VERSION_TOKEN = re.compile(r"(?<![\w.])\d+\.\d+(?:\.\d+)*(?![\w.]*\w)")
@@ -540,9 +578,7 @@ def tidy_reply(reply: str, selected: Sequence[Finding]) -> str:
     text = re.sub(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+", "", text)
 
     def location(match: re.Match) -> str:
-        number, note = int(match[1]), match[2]
-        if note:  # "F1 (UserRepo.kt:21)" already names the place
-            return note
+        number = int(match[1])
         return _short_location(selected[number - 1]) if 1 <= number <= len(selected) else match[0]
 
     return REF.sub(location, text).strip()
