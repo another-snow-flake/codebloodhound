@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from graphlib import CycleError, TopologicalSorter
 from typing import NamedTuple
@@ -14,7 +15,49 @@ from .webhooks import WEBHOOK_REF, WebhookError, send_webhook
 
 SEVERITY_RANK = {severity: rank for rank, severity in enumerate(("low", "medium", "high", "critical"))}
 SCANNERS = {"secrets": find_secrets, "sca": find_vulnerable_dependencies, "sast": find_kotlin_issues}
-SUPPORTED_NODES = {"trigger", "condition", "ai", "notify", *SCANNERS}
+SUPPORTED_NODES = {"trigger", "condition", "ai", "notify", "custom", *SCANNERS}
+MAX_PORTS = 4
+MAX_NOTE = 1000
+COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _port_count(node: Node, key: str) -> int:
+    return node.config[key]  # validated by validate_node_config before use
+
+
+def validate_node_config(node: Node) -> None:
+    """Config shared by every node (the note) and the custom node's own settings."""
+    note = node.config.get("note", "")
+    if not isinstance(note, str) or len(note) > MAX_NOTE:
+        raise ApiProblem(422, "invalid_node_config", f"A node note must be text up to {MAX_NOTE} characters.")
+    if node.type != "custom":
+        return
+    title, color = node.config.get("title"), node.config.get("color")
+    inputs, outputs = node.config.get("inputs"), node.config.get("outputs")
+    if (
+        not isinstance(title, str) or not 1 <= len(title.strip()) <= 40
+        or not isinstance(color, str) or not COLOR.fullmatch(color)
+        or type(inputs) is not int or not 1 <= inputs <= MAX_PORTS
+        or type(outputs) is not int or not 0 <= outputs <= MAX_PORTS
+    ):
+        raise ApiProblem(422, "invalid_node_config",
+                         "A custom node needs a title up to 40 characters, a #rrggbb color, 1-4 inputs and 0-4 outputs.")
+
+
+def output_handles(node: Node) -> set[str | None]:
+    if node.type == "condition":
+        return {"true", "false"}
+    if node.type == "custom":
+        count = _port_count(node, "outputs")
+        return {None} if count == 1 else {f"out{number}" for number in range(1, count + 1)}
+    return {None}
+
+
+def input_handles(node: Node) -> set[str | None]:
+    if node.type == "custom":
+        count = _port_count(node, "inputs")
+        return {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
+    return {None}
 
 
 class ExecutionPlan(NamedTuple):
@@ -38,12 +81,18 @@ def validate_edges(workflow: WorkflowDraft) -> dict[str, list[Edge]]:
     incoming: dict[str, list[Edge]] = {node_id: [] for node_id in nodes}
     if len(nodes) != len(workflow.nodes) or len({edge.id for edge in workflow.edges}) != len(workflow.edges):
         raise ApiProblem(422, "invalid_workflow", "Node IDs and edge IDs must be unique.")
+    for node in workflow.nodes:
+        validate_node_config(node)
     for edge in workflow.edges:
         if edge.source not in nodes or edge.target not in nodes:
             raise ApiProblem(422, "invalid_workflow", "Every edge must connect existing nodes.")
-        is_condition = nodes[edge.source].type == "condition"
-        if is_condition != (edge.sourceHandle is not None):
+        source = nodes[edge.source]
+        if source.type == "condition" and edge.sourceHandle not in ("true", "false"):
             raise ApiProblem(422, "invalid_workflow", "Only condition edges require a true or false sourceHandle.")
+        if edge.sourceHandle not in output_handles(source):
+            raise ApiProblem(422, "invalid_workflow", "An edge leaves through a port its source node does not have.")
+        if edge.targetHandle not in input_handles(nodes[edge.target]):
+            raise ApiProblem(422, "invalid_workflow", "An edge enters through a port its target node does not have.")
         incoming[edge.target].append(edge)
     return incoming
 
@@ -202,6 +251,9 @@ def execute_plan(
                 result.output, result.error = outcome.output, outcome.error
                 if outcome.analysis is not None:
                     context.analyses[node.id] = outcome.analysis
+            elif node.type == "custom":
+                # a user-defined step: passes the findings it received to every output
+                result.output = {"passed": len(context.findings)}
             elif node.type == "notify":
                 status_code = send_webhook(node.config["webhookRef"], {
                     "runId": report.runId, "workflowId": report.workflowId, "nodeId": node.id,
@@ -215,7 +267,8 @@ def execute_plan(
                 })
                 result.output = {"delivered": True, "statusCode": status_code}
             result.status = "succeeded"
-            active_contexts[node.id, handle] = context
+            for active in (output_handles(node) if node.type == "custom" else {handle}):
+                active_contexts[node.id, active] = context
         except WebhookError as error:
             result.status = "failed"
             result.error = str(error)

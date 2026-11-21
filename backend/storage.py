@@ -3,7 +3,7 @@ import os
 import psycopg
 from psycopg.types.json import Jsonb
 
-from .schemas import RunReport, Workflow
+from .schemas import NodeTemplate, RunReport, Workflow
 
 
 DEFAULT_DATABASE_URL = "postgresql://cyber_garden:cyber_garden_dev@127.0.0.1:5432/cyber_garden"
@@ -31,6 +31,13 @@ class Storage:
                 )
             """)
             connection.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, body JSONB NOT NULL)")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS node_templates (
+                    id TEXT PRIMARY KEY,
+                    body JSONB NOT NULL,
+                    created_order BIGINT GENERATED ALWAYS AS IDENTITY
+                )
+            """)
             if not recover_interrupted:
                 return
             interrupted = connection.execute("""
@@ -73,6 +80,24 @@ class Storage:
                 INSERT INTO workflows (id, body) VALUES (%s, %s)
                 ON CONFLICT(id) DO UPDATE SET body = excluded.body
             """, (workflow.id, Jsonb(workflow.model_dump(mode="json"))))
+
+    def list_node_templates(self) -> list[NodeTemplate]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT body FROM node_templates ORDER BY created_order DESC").fetchall()
+        return [NodeTemplate.model_validate(body) for (body,) in rows]
+
+    def count_node_templates(self) -> int:
+        with self.connect() as connection:
+            return connection.execute("SELECT count(*) FROM node_templates").fetchone()[0]
+
+    def save_node_template(self, template: NodeTemplate):
+        with self.connect() as connection:
+            connection.execute("INSERT INTO node_templates (id, body) VALUES (%s, %s)",
+                               (template.id, Jsonb(template.model_dump(mode="json"))))
+
+    def delete_node_template(self, template_id: str) -> bool:
+        with self.connect() as connection:
+            return connection.execute("DELETE FROM node_templates WHERE id = %s", (template_id,)).rowcount > 0
 
     def save_run(self, report: RunReport):
         with self.connect() as connection:

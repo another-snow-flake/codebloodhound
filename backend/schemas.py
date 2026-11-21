@@ -4,7 +4,11 @@ from pydantic import BaseModel, Field, JsonValue, StringConstraints
 
 
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=100)]
-NodeType = Literal["trigger", "secrets", "sca", "sast", "condition", "ai", "notify"]
+NodeType = Literal["trigger", "secrets", "sca", "sast", "condition", "ai", "notify", "custom"]
+# condition edges leave through "true"/"false"; a custom node with several outputs or inputs
+# names the port: "out1".."out4", "in1".."in4"
+SourceHandle = Annotated[str, StringConstraints(pattern=r"^(?:true|false|out[1-4])$")]
+TargetHandle = Annotated[str, StringConstraints(pattern=r"^in[1-4]$")]
 RunStatus = Literal["queued", "running", "succeeded", "failed"]
 NodeStatus = Literal["queued", "running", "succeeded", "failed", "skipped"]
 Severity = Literal["low", "medium", "high", "critical"]
@@ -26,7 +30,8 @@ class Edge(BaseModel):
     id: Identifier
     source: Identifier
     target: Identifier
-    sourceHandle: Literal["true", "false"] | None = None
+    sourceHandle: SourceHandle | None = None
+    targetHandle: TargetHandle | None = None
 
 
 class WorkflowDraft(BaseModel):
@@ -36,6 +41,17 @@ class WorkflowDraft(BaseModel):
 
 
 class Workflow(WorkflowDraft):
+    id: Identifier
+
+
+class NodeTemplateDraft(BaseModel):
+    """A node saved to the shared library: a custom node or a standard one with its text."""
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=60)]
+    type: NodeType
+    config: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class NodeTemplate(NodeTemplateDraft):
     id: Identifier
 
 

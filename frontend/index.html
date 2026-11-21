@@ -50,6 +50,19 @@ aside{background:var(--panel);min-height:0;display:flex;flex-direction:column}
 .cat{display:flex;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 10px}
 .cat:hover{border-color:var(--acc)}
 .cat small{display:block;color:var(--mute);font-size:12px}
+.seg{display:flex;gap:4px;padding:3px;background:var(--bg);border:1px solid var(--line);border-radius:9px}
+.seg button{flex:1;border:0;background:none;border-radius:7px;padding:5px 6px;color:var(--mute);font-size:12.5px}
+.seg button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.cat-row{display:flex;gap:6px;align-items:stretch}.cat-row .cat{flex:1;min-width:0}
+.cat-row .x{border:1px solid var(--line);background:var(--card);border-radius:10px;width:32px;color:var(--mute)}
+.cat-row .x:hover{color:var(--bad);border-color:var(--bad)}
+.cat.new{border-style:dashed;justify-content:center;color:var(--acc);font-weight:600}
+.swatches{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:4px}
+.swatches button{width:24px;height:24px;border-radius:50%;border:2px solid var(--card);box-shadow:0 0 0 1px var(--line)}
+.swatches button.on{box-shadow:0 0 0 2px var(--ink)}
+.swatches input[type=color]{width:34px;height:26px;border:1px solid var(--line);border-radius:6px;background:none;padding:0}
+.ports{display:flex;gap:10px}.ports>div{flex:1}
+.modal textarea.note-in,.insp textarea{height:72px;font-family:inherit;font-size:13px;width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px;resize:vertical}
 .dot{width:10px;height:10px;border-radius:3px;flex:none}
 .empty{color:var(--mute);padding:14px 4px;line-height:1.5}
 .wfi{display:flex;gap:6px}
@@ -66,6 +79,8 @@ svg.edges text{font-size:11px;fill:var(--mute)}
 .node.sel{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 25%,transparent)}
 .node b{display:block;font-size:13.5px;line-height:1.25}
 .node .st{margin-top:6px;font-size:12px;color:var(--mute);display:flex;align-items:center;gap:6px}
+.node .nt{margin-top:4px;font-size:11.5px;color:var(--mute);font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .node .bar{position:absolute;left:0;top:10px;bottom:10px;width:4px;border-radius:0 4px 4px 0}
 .sdot{width:8px;height:8px;border-radius:50%;background:var(--skip)}
 .s-running .sdot{background:var(--run);animation:pl 1s infinite}
@@ -249,12 +264,35 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
   <textarea id="jsonOut" readonly></textarea>
   <div class="row"><button class="btn" id="jsonCopy">Копировать</button><button class="btn pri" id="jsonDownload">Скачать</button><button class="btn" data-close>Закрыть</button></div>
 </div></div>
+<div class="ov" id="ovNode"><div class="modal">
+  <h2>Своя нода</h2><p class="note">Своя нода передаёт находки со входов на все выходы. Её удобно использовать как шаг ручной проверки, комментарий или развилку.</p>
+  <label class="f" for="cnTitle">Название</label><input type="text" id="cnTitle" maxlength="40" placeholder="Например, «Ревью тимлида»">
+  <div class="ports"><div><label class="f" for="cnIn">Входов</label><select id="cnIn"><option>1</option><option>2</option><option>3</option><option>4</option></select></div>
+    <div><label class="f" for="cnOut">Выходов</label><select id="cnOut"><option>0</option><option selected>1</option><option>2</option><option>3</option><option>4</option></select></div></div>
+  <label class="f">Цвет</label><div class="swatches" id="cnColors"></div>
+  <label class="f" for="cnNote">Текст в ноде (необязательно)</label><textarea class="note-in" id="cnNote" maxlength="1000" placeholder="Что проверить на этом шаге"></textarea>
+  <label class="chk note"><input type="checkbox" id="cnSave" checked> Сохранить в «Сохранённые», чтобы использовать снова</label>
+  <div class="row"><button class="btn" data-close>Отмена</button><button class="btn pri" id="cnCreate">Добавить на холст</button></div>
+</div></div>
 <div class="toast" id="toast" role="status"></div>
 
 <script>
 const T={trigger:{n:"Запуск",d:"Ручной запуск",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Ветвление по критичности",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
 const SCANNERS=new Set(["secrets","sca","sast"]);
-const SUPPORTED=new Set(["trigger","condition","ai","notify",...SCANNERS]);
+const SUPPORTED=new Set(["trigger","condition","ai","notify","custom",...SCANNERS]);
+// Свои ноды: название, цвет и число портов хранятся в config. Порты с номерами («in2», «out3»)
+// нужны только когда их больше одного, так же их проверяет бэкенд.
+const NODE_COLORS=["#2f6b4f","#b3261e","#d9622b","#c79a14","#2d6cdf","#7a5ac8","#5a8bb5","#68766d"];
+const isColor=c=>typeof c==="string"&&/^#[0-9a-fA-F]{6}$/.test(c);
+const nodeName=n=>n.type==="custom"?(n.config?.title||"Своя нода"):(T[n.type]?.n||n.type);
+const nodeColor=n=>n.type==="custom"?(isColor(n.config?.color)?n.config.color:"#68766d"):(T[n.type]?.c||"#68766d");
+function ports(n){if(n.type==="custom")return{ins:+n.config.inputs||1,outs:Math.max(0,+n.config.outputs||0)};
+  return{ins:n.type==="trigger"?0:1,outs:n.type==="condition"?2:1}}
+function outHandle(n,k){if(n.type==="condition")return k===1?"true":"false";return n.type==="custom"&&ports(n).outs>1?"out"+k:null}
+function inHandle(n,k){return n.type==="custom"&&ports(n).ins>1?"in"+k:null}
+function handleIndex(n,h,out){if(!h)return 1;if(h==="true")return 1;if(h==="false")return 2;return +h.replace(/\D/g,"")||1}
+function nodeHeight(n){const p=ports(n);return Math.max(72,22*Math.max(p.ins,p.outs)+28)+(n.config?.note?18:0)}
+function portY(n,k,count){return Math.round(nodeHeight(n)*k/(count+1))}
 const SEV=["low","medium","high","critical"],SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
 const REPORT_LEVELS={critical:"Критические",high:"Высокие",medium:"Средние",low:"Низкие"};
 const RULES={
@@ -336,46 +374,51 @@ function nodeIssues(n){const s=report?.nodes.find(x=>x.nodeId===n.id);if(!s||s.s
 function nodeIssuesBlock(){if(!report||sel?.t!=="n")return"";const n=wf.nodes.find(x=>x.id===sel.id);if(!n)return"";
   const s=report.nodes.find(x=>x.nodeId===n.id);if(!s||n.type==="trigger"||n.type==="condition")return"";
   const iss=nodeIssues(n);
-  if(!iss)return s.status==="succeeded"?`<div class="node-issues ok"><h4>${T[n.type].n}: проблем не найдено</h4></div>`:"";
+  if(!iss)return s.status==="succeeded"?`<div class="node-issues ok"><h4>${esc(nodeName(n))}: проблем не найдено</h4></div>`:"";
   const label=r=>Object.hasOwn(RULES,r)?RULES[r]:r;
-  return`<div class="node-issues ${iss.level}"><h4>Что не так: ${T[n.type].n}${iss.count?` · ${plural(iss.count,"находка","находки","находок")}`:""}</h4>
+  return`<div class="node-issues ${iss.level}"><h4>Что не так: ${esc(nodeName(n))}${iss.count?` · ${plural(iss.count,"находка","находки","находок")}`:""}</h4>
     ${iss.error?`<p style="margin:0 0 6px">${esc(iss.error)}</p>`:""}
     ${iss.items.map(it=>`<div class="ni"><b><span class="sev ${esc(it.severity)}" aria-hidden="true"></span>${esc(it.g?.title||label(it.rule))}</b> <small>· ${SEVRU[it.severity]||esc(it.severity)} · ${plural(it.findings.length,"место","места","мест")}</small>
       <p>${esc(it.g?.explanation||it.message)}</p>${it.g?`<p><i>Что сделать:</i> ${esc(it.g.action)}</p>`:""}
       <ul>${it.findings.map(findingItem).join("")}</ul></div>`).join("")}</div>`}
 function render(){
   const bd=$("#board");bd.querySelectorAll(".node").forEach(e=>e.remove());
-  for(const n of wf.nodes){const t=T[n.type],e=document.createElement("div");e.className="node";e.dataset.id=n.id;
+  for(const n of wf.nodes){const e=document.createElement("div");e.className="node";e.dataset.id=n.id;
     const s=report?.nodes.find(x=>x.nodeId===n.id)?.status;if(s)e.classList.add("s-"+s);
     const iss=nodeIssues(n);if(iss){e.classList.add("alert-"+iss.level);e.title="Нажмите, чтобы увидеть, что не так"}
-    e.innerHTML=`<span class="bar" style="background:${t.c}"></span><b>${t.n}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается"}</div>`+
+    const p=ports(n),note=n.config?.note;
+    e.innerHTML=`<span class="bar" style="background:${nodeColor(n)}"></span><b>${esc(nodeName(n))}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается"}</div>`+
+    (note?`<div class="nt" title="${esc(note)}">${esc(note)}</div>`:"")+
     (iss?`<span class="badge" aria-label="Проблем: ${iss.count||1}">${iss.count||"!"}</span>`:"")+
-    (n.type!=="trigger"?`<span class="h in" data-in="${esc(n.id)}" title="Вход"></span>`:"")+
-    (n.type==="condition"?`<span class="h t" data-out="${esc(n.id)}" data-hd="true" title="Выход «да»"></span><span class="h f" data-out="${esc(n.id)}" data-hd="false" title="Выход «нет»"></span>`:`<span class="h out" data-out="${esc(n.id)}" title="Выход"></span>`);
+    Array.from({length:p.ins},(_,i)=>`<span class="h in" data-in="${esc(n.id)}" data-hi="${inHandle(n,i+1)||""}" style="top:${portY(n,i+1,p.ins)-7}px" title="Вход${p.ins>1?" "+(i+1):""}"></span>`).join("")+
+    Array.from({length:p.outs},(_,i)=>{const h=outHandle(n,i+1),cls=h==="true"?"t":h==="false"?"f":"out",
+      label=h==="true"?"Выход «да»":h==="false"?"Выход «нет»":"Выход"+(p.outs>1?" "+(i+1):"");
+      return`<span class="h ${cls}" data-out="${esc(n.id)}" data-hd="${h||""}" style="top:${portY(n,i+1,p.outs)-7}px" title="${label}"></span>`}).join("");
+    e.style.height=nodeHeight(n)+"px";
     if(sel?.t==="n"&&sel.id===n.id)e.classList.add("sel");
     e.style.left=n.position.x+"px";e.style.top=n.position.y+"px";bd.appendChild(e)}
   edges();inspector();if(report&&$("#repBody").dataset.issuesFor!==(sel?.t==="n"?sel.id:""))renderRep()}
-function pt(n,out,h){const p=n.position;return out?[p.x+190,p.y+(n.type==="condition"?(h==="true"?24:50):36)]:[p.x,p.y+36]}
+function pt(n,out,h){const p=n.position,c=ports(n);return out?[p.x+190,p.y+portY(n,handleIndex(n,h,1),c.outs)]:[p.x,p.y+portY(n,handleIndex(n,h,0),c.ins)]}
 function edges(tmp){const sv=$("#edges");let h="";
   for(const e of wf.edges){const a=wf.nodes.find(n=>n.id===e.source),b=wf.nodes.find(n=>n.id===e.target);if(!a||!b)continue;
-    const[x1,y1]=pt(a,1,e.sourceHandle),[x2,y2]=pt(b,0),dx=Math.max(40,(x2-x1)/2);
+    const[x1,y1]=pt(a,1,e.sourceHandle),[x2,y2]=pt(b,0,e.targetHandle),dx=Math.max(40,(x2-x1)/2);
     const act=report&&report.nodes.find(x=>x.nodeId===e.target)?.status==="succeeded";
     h+=`<path data-e="${esc(e.id)}" class="${sel?.t==="e"&&sel.id===e.id?"on":""} ${act?"act":""}" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}"/>`;
-    if(e.sourceHandle)h+=`<text x="${x1+8}" y="${y1-6}">${e.sourceHandle==="true"?"да":"нет"}</text>`}
+    if(e.sourceHandle)h+=`<text x="${x1+8}" y="${y1-6}">${e.sourceHandle==="true"?"да":e.sourceHandle==="false"?"нет":e.sourceHandle.slice(3)}</text>`}
   if(tmp)h+=`<path d="M${tmp[0]},${tmp[1]} L${tmp[2]},${tmp[3]}" style="stroke-dasharray:5 4;pointer-events:none"/>`;sv.innerHTML=h}
 function cycle(s,t){const seen=new Set();const go=id=>{if(id===s)return true;if(seen.has(id))return false;seen.add(id);return wf.edges.filter(e=>e.source===id).some(e=>go(e.target))};return go(t)}
 const bd=$("#board");
 bd.addEventListener("pointerdown",ev=>{
   if(running)return;
   const o=ev.target.closest("[data-out]"),nd=ev.target.closest(".node");const r=bd.getBoundingClientRect();
-  if(o){ev.preventDefault();const src=wf.nodes.find(n=>n.id===o.dataset.out),hd=o.dataset.hd,[x1,y1]=pt(src,1,hd);
+  if(o){ev.preventDefault();const src=wf.nodes.find(n=>n.id===o.dataset.out),hd=o.dataset.hd||undefined,[x1,y1]=pt(src,1,hd);
     const mv=e=>edges([x1,y1,e.clientX-r.left,e.clientY-r.top]);
     const up=e=>{removeEventListener("pointermove",mv);removeEventListener("pointerup",up);edges();
-      const t=document.elementFromPoint(e.clientX,e.clientY)?.closest("[data-in]");if(!t)return;const tid=t.dataset.in;
+      const t=document.elementFromPoint(e.clientX,e.clientY)?.closest("[data-in]");if(!t)return;const tid=t.dataset.in,hi=t.dataset.hi||undefined;
       if(tid===src.id)return toast("Нельзя соединить ноду с самой собой");
-      if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&x.sourceHandle===hd))return toast("Такая связь уже есть");
+      if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&x.sourceHandle===hd&&x.targetHandle===hi))return toast("Такая связь уже есть");
       if(cycle(src.id,tid))return toast("Циклы запрещены: связь замкнёт сценарий");
-      wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{})});clearReport()};
+      wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{}),...(hi?{targetHandle:hi}:{})});clearReport()};
     addEventListener("pointermove",mv);addEventListener("pointerup",up);return}
   if(nd&&!ev.target.closest("[data-in]")){const n=wf.nodes.find(x=>x.id===nd.dataset.id);sel={t:"n",id:n.id};
     const ox=ev.clientX-n.position.x,oy=ev.clientY-n.position.y;
@@ -403,7 +446,12 @@ function webhookInspector(selected){
 function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
   const box=document.createElement("div");box.className="insp";let h="";
   if(sel.t==="e")h=`<h3>Связь</h3><p class="note">Выбранную связь можно удалить.</p><button class="btn" id="delSel" style="margin-top:8px">Удалить связь</button>`;
-  else{const n=wf.nodes.find(x=>x.id===sel.id),c=n.config;h=`<h3>${T[n.type].n}</h3>`;
+  else{const n=wf.nodes.find(x=>x.id===sel.id),c=n.config;h=`<h3>${esc(nodeName(n))}</h3>`;
+    if(n.type==="custom")h+=`<label class="f">Название</label><input type="text" data-c="title" maxlength="40" value="${esc(c.title||"")}">
+      <div class="ports"><div><label class="f">Входов</label><select data-c="inputs">${[1,2,3,4].map(v=>`<option ${v===+c.inputs?"selected":""}>${v}</option>`).join("")}</select></div>
+      <div><label class="f">Выходов</label><select data-c="outputs">${[0,1,2,3,4].map(v=>`<option ${v===+c.outputs?"selected":""}>${v}</option>`).join("")}</select></div></div>
+      <label class="f">Цвет</label><div class="swatches">${NODE_COLORS.map(col=>`<button type="button" data-col="${col}" class="${col===c.color?"on":""}" style="background:${col}" aria-label="Цвет ${col}"></button>`).join("")}<input type="color" data-c="color" value="${isColor(c.color)?c.color:"#68766d"}" aria-label="Свой цвет"></div>
+      <p class="note">Передаёт находки со входов на все выходы. Лишние связи при уменьшении портов удаляются.</p>`;
     if(n.type==="trigger")h+=`<label class="f">Режим</label><select data-k="mode"><option value="manual">Вручную</option><option value="schedule" disabled>По расписанию (скоро)</option></select><p class="note">Источник берётся из панели «Проект».</p>`;
     else if(n.type==="condition")h+=`<label class="f">Если есть находка не ниже</label><select data-k="minSeverity">${SEV.map(s=>`<option value="${s}">${SEVRU[s]}</option>`).join("")}</select><p class="note">Выход «да» срабатывает при совпадении, иначе «нет». Сравнения и regex появятся позже.</p>`;
     else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в .kt, .kts, .java, .properties, .yml, .json, .toml и .env. Значения секретов в отчёт не попадают.</p>`;
@@ -411,21 +459,71 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin-код на ошибки в SQL, настройках TLS и CORS, правилах доступа к маршрутам и записям.</p>`;
     else if(n.type==="ai")h+=`<p class="note">Объясняет находки из входящих связей и предлагает исправления. Модель выбирается на бэкенде (локальная или DeepSeek). Новых находок AI не добавляет. Если модель недоступна, находки пойдут дальше без рекомендаций.</p>`;
     else if(n.type==="notify")h+=webhookInspector(c.webhookRef);
+    else if(n.type==="custom");  // настройки своей ноды выведены выше
     else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
+    if(n.type!=="trigger")h+=`<label class="f" for="nodeNote">Текст в ноде</label><textarea id="nodeNote" maxlength="1000" placeholder="Заметка: что проверить, кто отвечает">${esc(c.note||"")}</textarea>
+      <button class="btn" id="saveTpl" style="margin-top:8px">Сохранить ноду в «Сохранённые»</button>`;
     h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
   box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
   box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id);el.value=n.config[el.dataset.k]??({minSeverity:"high",mode:"manual"}[el.dataset.k]||"");
     if(el.dataset.k==="minSeverity"&&!n.config.minSeverity)n.config.minSeverity="high";
     el.disabled=running;
     el.onchange=()=>{n.config[el.dataset.k]=el.value;clearReport()}});
+  const node=sel.t==="n"&&wf.nodes.find(x=>x.id===sel.id);
+  if(node){const note=box.querySelector("#nodeNote");
+    if(note){note.disabled=running;note.oninput=()=>{node.config.note=note.value};note.onchange=()=>{node.config.note=note.value.trim();if(!node.config.note)delete node.config.note;render()}}
+    box.querySelector("#saveTpl")?.addEventListener("click",()=>saveTemplate(node));
+    box.querySelectorAll("[data-c]").forEach(el=>{el.disabled=running;el.onchange=()=>{const k=el.dataset.c;
+      node.config[k]=k==="inputs"||k==="outputs"?+el.value:k==="title"?(el.value.trim()||"Своя нода"):el.value;
+      if(k==="inputs"||k==="outputs")dropDeadEdges(node);clearReport()}});
+    box.querySelectorAll("[data-col]").forEach(b=>b.onclick=()=>{if(running)return;node.config.color=b.dataset.col;render()})}
   $("#delSel").onclick=del}
+// связи, которые ведут в исчезнувшие порты своей ноды, удаляются
+function dropDeadEdges(n){const outs=new Set(Array.from({length:ports(n).outs},(_,i)=>outHandle(n,i+1)??undefined)),
+  ins=new Set(Array.from({length:ports(n).ins},(_,i)=>inHandle(n,i+1)??undefined));
+  wf.edges=wf.edges.filter(e=>(e.source!==n.id||outs.has(e.sourceHandle))&&(e.target!==n.id||ins.has(e.targetHandle)))}
+async function saveTemplate(n){const note=(n.config.note||"").trim();
+  const name=(nodeName(n)+(note&&n.type!=="custom"?" — "+note:"")).slice(0,60);
+  const {note:_,...rest}=n.config,config=note?{...rest,note}:rest;
+  try{await api("/node-templates",{method:"POST",headers:JH,body:JSON.stringify({name,type:n.type,config})});
+    toast("Нода сохранена в «Сохранённые»");if(tab==="cat"&&libTab==="saved")left()}catch(e){fail(e)}}
 // левая панель
 let tab="cat";
+let libTab="std",templates=[];
+function addNode(type,config){if(running)return toast("Дождитесь завершения проверки");
+  if(type==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
+  const n=mk(type,60+(wf.nodes.length%5)*30,260+(wf.nodes.length%4)*50,config);wf.nodes.push(n);sel={t:"n",id:n.id};clearReport()}
+function portsText(c){return`${plural(+c.inputs||1,"вход","входа","входов")}, ${plural(+c.outputs||0,"выход","выхода","выходов")}`}
 function left(){const l=$("#leftList");
   if(tab==="my")return loadMy();
-  l.innerHTML=Object.entries(T).map(([k,t])=>`<button class="cat" data-add="${k}"><span class="dot" style="background:${t.c}"></span><span>${t.n}<small>${t.d}${SUPPORTED.has(k)?"":" (пока черновик)"}</small></span></button>`).join("");
-  l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{if(running)return toast("Дождитесь завершения проверки");const k=b.dataset.add;if(k==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
-    const n=mk(k,60+(wf.nodes.length%5)*30,260+(wf.nodes.length%4)*50,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:{});wf.nodes.push(n);sel={t:"n",id:n.id};clearReport()})}
+  const head=`<div class="seg" role="tablist"><button role="tab" data-lib="std" class="${libTab==="std"?"on":""}">Стандартные</button><button role="tab" data-lib="saved" class="${libTab==="saved"?"on":""}">Сохранённые</button></div>
+    <button class="cat new" id="newNode">＋ Создать свою ноду</button>`;
+  if(libTab==="std")l.innerHTML=head+Object.entries(T).map(([k,t])=>`<button class="cat" data-add="${k}"><span class="dot" style="background:${t.c}"></span><span>${t.n}<small>${t.d}${SUPPORTED.has(k)?"":" (пока черновик)"}</small></span></button>`).join("");
+  else{l.innerHTML=head+`<div class="empty">Загрузка…</div>`;loadTemplates()}
+  l.querySelectorAll("[data-lib]").forEach(b=>b.onclick=()=>{libTab=b.dataset.lib;left()});
+  $("#newNode").onclick=openNodeDialog;
+  l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{const k=b.dataset.add;addNode(k,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:{})})}
+async function loadTemplates(){const l=$("#leftList");
+  try{templates=await api("/node-templates")}catch(e){if(tab==="cat"&&libTab==="saved")l.querySelector(".empty").textContent=e.message||"Не удалось загрузить сохранённые ноды";return}
+  if(tab!=="cat"||libTab!=="saved")return;
+  l.querySelector(".empty")?.remove();
+  l.insertAdjacentHTML("beforeend",`<p class="note" style="margin:0">Общая библиотека: сохранённые ноды видны всей команде.</p>`+(templates.length?templates.map((t,i)=>{const n={type:t.type,config:t.config||{}};
+    const info=t.type==="custom"?"своя нода · "+portsText(n.config):nodeName(n)+(n.config.note?" · с текстом":"");
+    return`<div class="cat-row"><button class="cat" data-tpl="${i}"><span class="dot" style="background:${nodeColor(n)}"></span><span style="min-width:0;flex:1"><span style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(t.name)}">${esc(t.name)}</span><small style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(info)}</small></span></button><button class="x" data-rm="${i}" title="Удалить из сохранённых" aria-label="Удалить «${esc(t.name)}» из сохранённых">×</button></div>`}).join("")
+    :`<div class="empty">Пока пусто. Создайте свою ноду или откройте ноду на холсте и нажмите «Сохранить ноду».</div>`));
+  l.querySelectorAll("[data-tpl]").forEach(b=>b.onclick=()=>{const t=templates[b.dataset.tpl];addNode(t.type,JSON.parse(JSON.stringify(t.config||{})))});
+  l.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async()=>{const t=templates[b.dataset.rm];
+    try{await api(`/node-templates/${encodeURIComponent(t.id)}/remove`,{method:"POST"});toast("Удалено из сохранённых");left()}catch(e){fail(e)}})}
+let cnColor=NODE_COLORS[4];
+function paintSwatches(){const box=$("#cnColors");
+  box.innerHTML=NODE_COLORS.map(c=>`<button type="button" data-col="${c}" class="${c===cnColor?"on":""}" style="background:${c}" aria-label="Цвет ${c}"></button>`).join("")+`<input type="color" id="cnCustom" value="${cnColor}" aria-label="Свой цвет">`;
+  box.querySelectorAll("[data-col]").forEach(b=>b.onclick=()=>{cnColor=b.dataset.col;paintSwatches()});
+  $("#cnCustom").oninput=e=>{cnColor=e.target.value;box.querySelectorAll("[data-col]").forEach(b=>b.classList.toggle("on",b.dataset.col===cnColor))}}
+function openNodeDialog(){if(running)return toast("Дождитесь завершения проверки");$("#cnTitle").value="";$("#cnNote").value="";$("#cnIn").value="1";$("#cnOut").value="1";$("#cnSave").checked=true;paintSwatches();$("#ovNode").classList.add("open");$("#cnTitle").focus()}
+$("#cnCreate").onclick=async()=>{const title=$("#cnTitle").value.trim();if(!title){$("#cnTitle").focus();return toast("Введите название ноды")}
+  const note=$("#cnNote").value.trim(),config={title,color:isColor(cnColor)?cnColor:NODE_COLORS[4],inputs:+$("#cnIn").value,outputs:+$("#cnOut").value,...(note?{note}:{})};
+  $("#ovNode").classList.remove("open");addNode("custom",JSON.parse(JSON.stringify(config)));
+  if($("#cnSave").checked){try{await api("/node-templates",{method:"POST",headers:JH,body:JSON.stringify({name:title,type:"custom",config})});toast("Нода добавлена и сохранена");if(tab==="cat"&&libTab==="saved")left()}catch(e){fail(e)}}};
 async function loadMy(){const l=$("#leftList");l.innerHTML=`<div class="empty">Загрузка…</div>`;
   try{const list=await api("/workflows");
     l.innerHTML=`<p class="note" style="margin:0 0 4px">Общее рабочее пространство: сценарии видны всей команде.</p>`+(list.length?list.map((s,i)=>`<button class="cat" data-i="${i}">${esc(s.name)}</button>`).join(""):`<div class="empty">Сохранённых сценариев пока нет. Откройте «Файл» → «Сохранить».</div>`);
@@ -539,7 +637,7 @@ $("#upBtn").onclick=async()=>{const f=$("#fileIn").files[0];
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length!==1)return"В сценарии должен быть ровно один запуск";
   if(wf.nodes.some(n=>n.type!=="trigger"&&!wf.edges.some(e=>e.target===n.id)))return"У одной из нод нет входящей связи";
-  const bad=wf.nodes.filter(n=>!SUPPORTED.has(n.type));if(bad.length)return`Нода «${T[bad[0].type].n}» пока не выполняется бэкендом. Уберите её, чтобы запустить сценарий.`;
+  const bad=wf.nodes.filter(n=>!SUPPORTED.has(n.type));if(bad.length)return`Нода «${esc(nodeName(bad[0]))}» пока не выполняется бэкендом. Уберите её, чтобы запустить сценарий.`;
   if(wf.nodes.some(n=>n.type==="condition"&&!n.config.minSeverity))return ERR.invalid_node_config;
   if(wf.nodes.some(n=>n.type==="notify"&&!n.config.webhookRef))return WEBHOOK_ERRORS.invalid_webhook_ref;
   return null}
@@ -567,7 +665,7 @@ function nodeNote(n,s){const o=s.output;
     if(o.aiAvailable)return`<br><small>${aiDoneText(o)}</small>`;
     const st=AI_STAGES.find(x=>x[0]===o.stage);if(st&&s.status==="running")return`<br><small>${st[1]}…</small>`}
   if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
-  if(!o)return"";if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
+  if(!o)return"";if(n.type==="custom")return`<br><small>передано находок: ${+o.passed||0}</small>`;if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
 function findingItem(f) {
   const location = f.line == null ? f.file : f.file + ":" + f.line;
   const advisory = f.cve || f.advisoryId;
@@ -620,7 +718,7 @@ function renderRep(){const b=$("#repBody");if(!report){delete b.dataset.runId;$(
   const scrollTop=sameRun?b.scrollTop:0;
   b.dataset.runId=report.runId;
   b.dataset.issuesFor=sel?.t==="n"?sel.id:"";
-  b.innerHTML=nodeIssuesBlock()+`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{const n=wf.nodes.find(x=>x.id===s.nodeId);return n?`<div><span>${T[n.type].n}${nodeNote(n,s)}</span><small>${stLabel(s.status)}</small></div>`:""}).join("")}</div></div>
+  b.innerHTML=nodeIssuesBlock()+`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{const n=wf.nodes.find(x=>x.id===s.nodeId);return n?`<div><span>${esc(nodeName(n))}${nodeNote(n,s)}</span><small>${stLabel(s.status)}</small></div>`:""}).join("")}</div></div>
   <div><h4>Находки (${fs.length})</h4>${renderFindings(fs,openGroups)}</div>`;
   b.scrollTop=scrollTop;
   b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{

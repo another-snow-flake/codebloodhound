@@ -10,9 +10,10 @@ from starlette.exceptions import HTTPException
 
 from .ai import answer_report_question
 from .llm import LlmError, ModelSpec, check_model, client_for, default_model_id, list_model_options, resolve_model
-from .runner import execute_plan, plan_run, validate_edges
+from .runner import execute_plan, plan_run, validate_edges, validate_node_config
 from .schemas import (
-    ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, NodeResult,
+    ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, Node, NodeResult,
+    NodeTemplate, NodeTemplateDraft, Position,
     RunChatRequest, RunChatResponse, RunCreated,
     RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
 )
@@ -39,6 +40,8 @@ def fixed_model(choice: ModelChoice) -> ModelSpec:
     except LlmError as error:
         raise llm_problem(error) from None
 
+
+MAX_NODE_TEMPLATES = 200
 
 LOCAL_ORIGINS = [
     f"http://{host}:{port}"
@@ -97,6 +100,28 @@ def create_app(dsn: str | None = None) -> FastAPI:
         source_id = uuid4().hex
         storage.save_source(source_id, archive)
         return SourceCreated(sourceId=source_id)
+
+    @app.get("/node-templates")
+    def list_node_templates() -> list[NodeTemplate]:
+        """Saved nodes shared by the team: custom nodes and standard nodes with their text."""
+        return storage.list_node_templates()
+
+    @app.post("/node-templates", status_code=201)
+    def create_node_template(draft: NodeTemplateDraft) -> NodeTemplate:
+        if draft.type == "trigger":
+            raise ApiProblem(422, "invalid_node_template", "A workflow has one trigger; it cannot be saved as a template.")
+        validate_node_config(Node(id="template", type=draft.type, position=Position(x=0, y=0), config=draft.config))
+        if storage.count_node_templates() >= MAX_NODE_TEMPLATES:
+            raise ApiProblem(409, "too_many_node_templates", f"The library holds up to {MAX_NODE_TEMPLATES} saved nodes.")
+        template = NodeTemplate(id=uuid4().hex, **draft.model_dump())
+        storage.save_node_template(template)
+        return template
+
+    @app.post("/node-templates/{template_id}/remove", status_code=204)
+    def remove_node_template(template_id: str):
+        # POST instead of DELETE: the demo proxy and CORS allow only GET, POST and PUT
+        if not storage.delete_node_template(template_id):
+            raise ApiProblem(404, "node_template_not_found", "Saved node not found.")
 
     @app.get("/workflows", response_model_exclude_none=True)
     def list_workflows() -> list[Workflow]:
