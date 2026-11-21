@@ -17,7 +17,9 @@ function inHandle(n,k){
   return n.type==="custom"&&n.config.inputs>1?"in"+k:null
 }
 function handleIndex(n,h){if(!h)return 1;if(h==="true")return 1;if(h==="false")return 2;if(h==="source")return ports(n).ins;return +h.replace(/\D/g,"")||1}
-function nodeHeight(n){const p=ports(n);return Math.max(72,22*Math.max(p.ins,p.outs)+28)+(n.config?.note?18:0)}
+// заметка в ноде: до трёх строк примерно по 26 символов, остальное обрезается многоточием
+function noteLines(n){const note=n.config?.note;return note?Math.min(3,Math.ceil(note.length/26)):0}
+function nodeHeight(n){const p=ports(n),lines=noteLines(n);return Math.max(72,22*Math.max(p.ins,p.outs)+28)+(lines?lines*15+4:0)}
 function portY(n,k,count){return Math.round(nodeHeight(n)*k/(count+1))}
 const SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
 const REPORT_LEVELS={critical:"Критические",high:"Высокие",medium:"Средние",low:"Низкие"};
@@ -136,7 +138,7 @@ function render(refreshInspector=true){
     const iss=nodeIssues(n);if(iss){e.classList.add("alert-"+iss.level);e.title="Нажмите, чтобы увидеть, что не так"}
     const p=ports(n),note=n.config?.note;
     e.innerHTML=`<span class="bar" style="background:${nodeColor(n)}"></span><b>${esc(nodeName(n))}</b><div class="st"><span class="sdot"></span>${s?stLabel(s):SUPPORTED.has(n.type)?"ожидает запуска":"черновик, не запускается"}</div>`+
-    (note?`<div class="nt" title="${esc(note)}">${esc(note)}</div>`:"")+
+    (note?`<div class="nt" title="${esc(note)}" style="-webkit-line-clamp:${noteLines(n)};max-height:${noteLines(n)*15}px">${esc(note)}</div>`:"")+
     (iss?`<span class="badge" aria-label="Проблем: ${iss.count||1}">${iss.count||"!"}</span>`:"")+
     Array.from({length:p.ins},(_,i)=>{const handle=inHandle(n,i+1),isSource=handle==="source";
       return `<span class="h in${isSource?" scope-port":""}" data-in="${esc(n.id)}" data-hi="${handle||""}" style="top:${portY(n,i+1,p.ins)-7}px" title="${isSource?"Источник (необязательно)":handle?"Вход "+(i+1):"Вход потока"}"></span>`}).join("")+
