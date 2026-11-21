@@ -33,7 +33,6 @@
     <button class="btn" id="accountBtn" type="button">Войти</button>
     <div class="dd" id="accountActions">
       <button id="openProfile" type="button">Профиль</button>
-      <button id="openAccountSettings" type="button">Настройки аккаунта</button>
       <button id="logoutBtn" type="button">Выйти</button>
     </div>
   </div>
@@ -207,13 +206,6 @@
     </dl>
     <div class="row account-actions"><button type="button" class="btn" data-close>Закрыть</button></div>
   </section>
-  <form id="pluginsForm" hidden>
-    <h3>Языковые плагины</h3>
-    <p class="note">Выбор применяется к новым запускам сценариев этого аккаунта. Плагины добавляют поиск секретов и SAST.</p>
-    <label class="chk note"><input type="checkbox" name="plugin" value="python"> Python</label>
-    <label class="chk note"><input type="checkbox" name="plugin" value="javascript"> JavaScript и TypeScript</label>
-    <div class="row account-actions"><button type="button" class="btn" data-close>Закрыть</button><button type="submit" class="btn pri">Сохранить плагины</button></div>
-  </form>
   <p class="note" id="accountStatus" aria-live="polite"></p>
 </div></div>
 <div class="ov" id="ovPublish"><form class="modal" id="publishForm" role="dialog" aria-modal="true" aria-labelledby="publishTitle">

@@ -8,6 +8,9 @@ from typing import NamedTuple
 from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities, template_analysis
 from .conditions import evaluate_condition, validate_condition
 from .language_plugins import LANGUAGE_SUFFIXES
+
+# Secret scanning and SAST cover every supported language; there is no per-account choice anymore.
+ALL_LANGUAGES = tuple(LANGUAGE_SUFFIXES)
 from .llm import LlmError, ModelSpec, client_for, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_static_issues
@@ -301,7 +304,7 @@ def execute_plan(
                 elif node.type == "custom" and (language := node.config.get("language")):
                     findings = SCANNERS[scanner](archive, path, language=language)
                 else:
-                    findings = SCANNERS[scanner](archive, path, report.languagePlugins or ())
+                    findings = SCANNERS[scanner](archive, path, ALL_LANGUAGES)
                 report.findings.extend(findings)
                 context.findings.update((finding.id, finding) for finding in findings)
                 result.output = {"findings": [finding.model_dump(mode="json", exclude_unset=True) for finding in findings]}

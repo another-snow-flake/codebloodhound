@@ -283,7 +283,7 @@ function scannerOptions(selected){
 }
 const supportsLanguage=scanner=>scanner==="secrets"||scanner==="sast";
 function languageOptions(selected){
-  const options=[["","Языки сценария"],...Object.entries(PLUGIN_NAMES)];
+  const options=[["","Все языки"],...Object.entries(PLUGIN_NAMES)];
   return options.map(([id,name])=>`<option value="${id}"${id===(selected??"")?" selected":""}>${name}</option>`).join("")
 }
 function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
@@ -303,16 +303,12 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     else if(n.type==="condition")h+=conditionInspector(c);
     else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в коде и конфигурации. В отчёте указывает файл и строку без значения секрета.</p>`;
     else if(n.type==="sca")h+=`<p class="note">Сверяет версии зависимостей Gradle со справочником Maven. Справочник берётся из архива или из настроек сервера.</p>`;
-    else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin и языки подключённых плагинов по правилам статического анализа.</p>`;
+    else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin, Python, JavaScript и TypeScript по правилам статического анализа.</p>`;
     else if(n.type==="ai")h+=`<p class="note">Объясняет находки и предлагает исправления. Модель выбирается в настройках редактора. При сбое модели отчёт показывает подсказки по правилам сканеров.</p>`;
     else if(n.type==="notify")h+=webhookInspector(c.webhookRef);
     else if(n.type==="custom");  // настройки своей ноды выведены выше
     else h+=`<p class="note">Бэкенд пока не умеет выполнять эту ноду. Её можно сохранить в сценарии как черновик, но запуск такого сценария будет отклонён.</p>`;
     if(nodeScanner(n))h+=`<p class="note">Без связи на входе «Источник» проверяется весь ZIP.</p>`;
-    if(supportsLanguage(nodeScanner(n))&&!c.language){
-      const plugins=(wf.id?wf.languagePlugins:account?.languagePlugins)||[];
-      if(plugins.length)h+=`<p class="note">Языковые плагины: ${esc(plugins.map(id=>PLUGIN_NAMES[id]).join(", "))}.</p>`
-    }
     if(n.type!=="trigger")h+=`<label class="f" for="nodeNote">Заметка</label><textarea id="nodeNote" maxlength="1000" placeholder="Что проверить или кто отвечает">${esc(c.note||"")}</textarea>
       ${n.config.privatePluginOwner?"":`<button class="btn" id="saveTpl" style="margin-top:8px">Сохранить в каталоге</button>`}
       ${n.type==="custom"?`<button class="btn" id="savePlugin" style="margin-top:8px">Сохранить как плагин</button>`:""}`;
@@ -615,7 +611,7 @@ const PROVIDERS={local:"локальная",deepseek:"DeepSeek API"};
 const ss={get:k=>{try{return sessionStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{v==null?sessionStorage.removeItem(k):sessionStorage.setItem(k,v)}catch(e){}}};
 const PLUGIN_NAMES={python:"Python",javascript:"JavaScript и TypeScript"};
 const ACCOUNT_ERRORS={
-  account_required:"Войдите, чтобы управлять языковыми плагинами.",
+  account_required:"Войдите в аккаунт.",
   invalid_session:"Сессия истекла. Войдите заново.",
   invalid_credentials:"Неверное имя пользователя или пароль.",
   username_taken:"Это имя пользователя уже занято.",
@@ -630,7 +626,6 @@ function setAccountMenu(open){
 }
 function showAccount(){
   const registering=accountMode==="register";
-  const settings=accountMode==="settings";
   accountButton.textContent=account?.username||"Войти";
   accountButton.title=account?.username||"";
   if(account){
@@ -641,15 +636,11 @@ function showAccount(){
     accountButton.removeAttribute("aria-controls");
     accountButton.removeAttribute("aria-expanded")
   }
-  $("#accountTitle").textContent=account?(settings?"Настройки аккаунта":"Профиль"):registering?"Регистрация":"Вход";
+  $("#accountTitle").textContent=account?"Профиль":registering?"Регистрация":"Вход";
   $("#accountForm").hidden=!!account||registering;$("#registerForm").hidden=!!account||!registering;
-  $("#accountProfile").hidden=!account||settings;
-  $("#pluginsForm").hidden=!account||!settings;
+  $("#accountProfile").hidden=!account;
   $("#accountName").textContent=account?.username||"";
   $("#accountEmail").textContent=account?.email||"Не указана";
-  $("#pluginsForm").querySelectorAll("[name=plugin]").forEach(input=>{
-    input.checked=account?.languagePlugins.includes(input.value)||false
-  })
 }
 function switchAccountMode(mode){
   if(accountPending)return;
@@ -700,7 +691,6 @@ accountButton.onclick=()=>{
   openAccountDialog("login")
 };
 $("#openProfile").onclick=()=>openAccountDialog("profile");
-$("#openAccountSettings").onclick=()=>openAccountDialog("settings");
 accountMenu.addEventListener("focusout",event=>{
   if(event.relatedTarget&&!accountMenu.contains(event.relatedTarget))setAccountMenu(false)
 });
@@ -745,21 +735,6 @@ async function submitCredentials(event,mode){
 }
 $("#accountForm").onsubmit=event=>submitCredentials(event,"login");
 $("#registerForm").onsubmit=event=>submitCredentials(event,"register");
-$("#pluginsForm").onsubmit=async event=>{
-  event.preventDefault();
-  if(accountPending||!account)return;
-  const status=$("#accountStatus"),button=event.currentTarget.querySelector('[type="submit"]'),origin=API,token=ss.get(accountTokenKey());
-  const languagePlugins=[...event.currentTarget.querySelectorAll("[name=plugin]:checked")].map(input=>input.value);
-  accountPending=true;button.disabled=true;
-  try{
-    const updated=await api("/accounts/plugins",{method:"PUT",headers:JH,body:JSON.stringify({languagePlugins})});
-    if(API!==origin||ss.get(accountTokenKey())!==token)return;
-    account=updated;
-    if(wf.languagePlugins)wf.languagePlugins=account.languagePlugins;
-    showAccount();inspector();status.textContent="Плагины сохранены."
-  }catch(error){status.textContent=error.message}
-  finally{button.disabled=false;accountPending=false}
-};
 $("#logoutBtn").onclick=async()=>{
   if(accountPending||!account)return;
   setAccountMenu(false);

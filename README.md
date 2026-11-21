@@ -53,11 +53,11 @@
 
 Для полной проверки загрузите учебный архив организаторов со справочником `vulnerability-database/vulnerabilities.json`. Добавьте из каталога «Анализ зависимостей» (SCA) и «Статический анализ» (SAST) и соедините их с остальным графом. SCA берёт версии из Gradle, отдаёт приоритет `gradle.lockfile` и сверяет версии с офлайн-справочником Maven. Если вы загружаете только исходники, задайте путь к справочнику через `CYBER_GARDEN_ADVISORIES` перед запуском API. SAST проверяет Kotlin по базовым правилам для SQL, TLS, CORS и прав доступа. Находки SAST требуют проверки по контексту.
 
-Демо-сайт защищён прокси. Войдите или зарегистрируйтесь в редакторе, чтобы сохранять личные сценарии и управлять языковыми плагинами. Старые сценарии и сценарии, сохранённые без входа, остаются общими. [Границы защиты](docs/security.md)
+Демо-сайт защищён прокси. Войдите или зарегистрируйтесь в редакторе, чтобы сохранять личные сценарии. Старые сценарии и сценарии, сохранённые без входа, остаются общими. [Границы защиты](docs/security.md)
 
 Для входа нужны имя пользователя и пароль. При регистрации укажите также уникальный адрес электронной почты и повторите пароль. Ранее созданные аккаунты без почты продолжают работать.
 
-Кнопка входа находится справа в верхней панели. После входа имя пользователя открывает меню с профилем, настройками аккаунта и выходом. В профиле видны имя и почта, а в настройках можно включить плагины Python и JavaScript/TypeScript. Сценарий получает плагины своего владельца при открытии и запуске, в том числе по расписанию. Плагины расширяют поиск секретов и SAST. SCA по-прежнему сверяет зависимости Gradle со справочником Maven.
+Кнопка входа находится справа в верхней панели. После входа имя пользователя открывает меню с профилем и выходом. В профиле видны имя и почта. Поиск секретов и SAST всегда проверяют Kotlin, Python, JavaScript и TypeScript, включать языки не нужно. SCA по-прежнему сверяет зависимости Gradle со справочником Maven.
 
 В разделе «Библиотека» → «Плагины» можно создать свой плагин или открыть кастомную ноду на холсте и нажать «Сохранить как плагин». У плагина есть название, описание и видимость. Публичные плагины доступны всей библиотеке. Приватные видны владельцу и добавляются в личные сценарии. Встроенные проверки поиска секретов и SAST можно ограничить языком Python или JavaScript/TypeScript, а входом «Источник» — файлом или папкой. Плагин добавляется копией, поэтому изменение видимости или удаление из библиотеки не меняет уже добавленные ноды.
 
@@ -141,7 +141,7 @@ To call the API directly, use the [requests and sample graph](#workflow-api). To
 
 For a full scan, upload the organizers' training archive with `vulnerability-database/vulnerabilities.json`. Add **Анализ зависимостей** (SCA) and **Статический анализ** (SAST) from the catalog and connect them to the graph. SCA reads Gradle dependency versions, prefers `gradle.lockfile`, and checks versions against the offline Maven catalog. For a ZIP with source files only, set `CYBER_GARDEN_ADVISORIES` to the catalog path before starting the API. SAST checks Kotlin with basic rules for SQL, TLS, CORS and authorization. Review SAST findings in context.
 
-The demo proxy protects access. Signed-in users have private workflows and archives, while older and guest workflows remain shared. The owner's Python and JavaScript/TypeScript plugins extend secret detection and SAST for both manual and scheduled runs. An optional source input limits a scanner to a file or folder inside the ZIP. [Security audit](docs/security.md)
+The demo proxy protects access. Signed-in users have private workflows and archives, while older and guest workflows remain shared. Secret detection and SAST always cover Kotlin, Python, JavaScript and TypeScript; there is no per-account language setting. An optional source input limits a scanner to a file or folder inside the ZIP. [Security audit](docs/security.md)
 
 To import by URL, configure `CYBER_GARDEN_REPOSITORIES` before starting the API with a comma-separated list of approved public training repositories in `owner/repo` format. Enter `https://github.com/owner/repo` in the editor. The default branch ZIP is subject to the same limits as a manual upload. Set `CYBER_GARDEN_ADVISORIES` for repositories without an SCA catalog.
 

@@ -19,7 +19,7 @@ class ScopedScannerTest(unittest.TestCase):
             project.writestr("training/application.properties", "app.password=synthetic-config")
         self.archive = archive.getvalue()
 
-    def workflow(self, scope):
+    def workflow(self, scope, plugins=("python", "javascript")):
         nodes = [("t", "trigger", {}), ("s", "secrets", {}), ("a", "sast", {})]
         edges = [{"id": "start", "source": "t", "target": "s"}, {"id": "scan", "source": "s", "target": "a"}]
         if scope is not None:
@@ -29,14 +29,14 @@ class ScopedScannerTest(unittest.TestCase):
                 for target in ("s", "a")
             )
         return Workflow.model_validate({
-            "id": "w", "name": "Scoped training scan", "languagePlugins": ["python", "javascript"],
+            "id": "w", "name": "Scoped training scan", "languagePlugins": list(plugins) if plugins is not None else None,
             "nodes": [{"id": key, "type": kind, "config": config, "position": {"x": 0, "y": 0}}
                       for key, kind, config in nodes],
             "edges": edges,
         })
 
-    def run_workflow(self, scope):
-        workflow = self.workflow(scope)
+    def run_workflow(self, scope, plugins=("python", "javascript")):
+        workflow = self.workflow(scope, plugins)
         report = RunReport.for_workflow(workflow)
         execute_plan(Mock(), report, plan_run(workflow), "archive", self.archive)
         return report
@@ -46,6 +46,12 @@ class ScopedScannerTest(unittest.TestCase):
         report = self.run_workflow(None)
         self.assertEqual(report.status, "succeeded")
         self.assertEqual(len(report.findings), 7)
+
+    def test_every_language_is_scanned_without_account_plugins(self):
+        for plugins in (None, ()):  # a shared workflow and an account that never chose a language
+            report = self.run_workflow(None, plugins)
+            self.assertEqual(len(report.findings), 7)
+            self.assertTrue({"training/src/server.py", "training/src/page.ts"} <= {f.file for f in report.findings})
 
     def test_folder_matches_exactly_and_keeps_both_language_plugins(self):
         report = self.run_workflow("src")
