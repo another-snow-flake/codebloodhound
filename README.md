@@ -13,7 +13,7 @@
 Обновлено 21 ноября 2026.
 
 - Сайт открыт по своему домену https://topsecretapi.online (и `www`) через VPS. Для показа без пароля есть ссылка-приглашение `/?key=…`: она ставит cookie на 30 дней.
-- Работают ручной запуск, три анализатора, условие по критичности, отчёт, AI-рекомендации и чат по отчёту.
+- Работают ручной и ежедневный запуск, три анализатора, условия по критичности, числу находок и регулярному выражению, отчёт, AI-рекомендации и чат.
 - AI показывает этапы работы и группирует рекомендации. Топ действий считается по критичности, а CVE для разных версий одной библиотеки идут в отдельные карточки.
 - Webhook отправляет находки и AI-рекомендации из активной ветки. Доставка проверена в Edge на локальном HTTP-приёмнике с 15 находками из учебного архива.
 - Модель для AI выбирается в настройках редактора отдельно в каждой вкладке: локальные модели из Ollama или DeepSeek. Модель передаётся с запуском и вопросом в чате и фиксируется до начала работы, согласие на DeepSeek проверяет сервер. Перед сменой выполняется проверочный запрос, и если он не проходит, остаётся прежняя модель. Проверено в Chrome на двух вкладках одновременно (qwen3:8b и DeepSeek) и с не скачанной моделью. DeepSeek проверяли через локальную заглушку с тем же API, на реальном ключе не проверяли.
@@ -31,7 +31,7 @@
 - Из завершённого отчёта можно скачать `findings.json` в формате организаторов. На учебном архиве выгрузка совпала с эталоном по всем 15 находкам и не включила ни одного из 6 безопасных примеров.
 - История в отчёте показывает запуски текущего сценария. Старые отчёты можно открыть и выгрузить. Холст перемещается перетаскиванием фона, новые ноды появляются в центре видимой области или рядом, если место занято.
 - Для разрешённых публичных учебных репозиториев GitHub доступна загрузка по HTTPS-ссылке.
-- До сдачи остаются расписание и дополнительные условия.
+- В отчёте можно раскрыть ноду и увидеть активные связи, количество переданных находок и AI-отчётов, а также до пяти примеров находок на каждой связи.
 
 После каждого крупного изменения обновляйте этот блок в том же коммите. Запишите, что заработало, как это проверили и что осталось. Так другой чат или участник команды сможет продолжить с актуального состояния.
 
@@ -44,16 +44,22 @@
 ### Первая проверка
 
 1. Соберите [учебный ZIP](#sample-zip) или возьмите проект организаторов. Загружайте только разрешённые учебные проекты. Лимит ZIP — 10 МиБ, после распаковки — 40 МиБ и 2000 записей.
-2. В редакторе выберите ZIP, нажмите «Загрузить», затем «Запустить». Начальный сценарий уже содержит ноды запуска, поиска секретов и условия по критичности.
+2. В редакторе нажмите «Выбрать ZIP», дождитесь загрузки и нажмите «Запустить». Начальный сценарий уже содержит ноды запуска, поиска секретов и условия по критичности.
 3. В отчёте для примера появится одна находка `high` в `application.properties:1`, а условие сработает. Значение пароля в отчёт не попадает. Сохранённый сценарий можно открыть в «Мои сценарии», а схему скачать через меню «Файл».
 
 Для работы напрямую с API используйте [запросы и пример графа](#workflow-api). Если остались данные старого SQLite-прототипа, запустите PostgreSQL и выполните [импорт](#database) перед запуском FastAPI. Он сохранит ID архивов, сценариев и отчётов, а при повторном запуске пропустит уже перенесённые записи.
 
 Для полной проверки загрузите учебный архив организаторов со справочником `vulnerability-database/vulnerabilities.json`. Добавьте из каталога «Анализ зависимостей» (SCA) и «Статический анализ» (SAST) и соедините их с остальным графом. SCA берёт версии из Gradle, отдаёт приоритет `gradle.lockfile` и сверяет версии с офлайн-справочником Maven. Если вы загружаете только исходники, задайте путь к справочнику через `CYBER_GARDEN_ADVISORIES` перед запуском API. SAST проверяет Kotlin по базовым правилам для SQL, TLS, CORS и прав доступа. Находки SAST требуют проверки по контексту.
 
-Пока это одно общее рабочее пространство. На демо-сайте доступ контролирует прокси. Границы защиты описаны в [аудите безопасности](docs/security.md). Запуск по расписанию ещё в работе.
+Пока это одно общее рабочее пространство. На демо-сайте доступ контролирует прокси. Границы защиты описаны в [аудите безопасности](docs/security.md).
 
 Для загрузки по ссылке задайте перед запуском API `CYBER_GARDEN_REPOSITORIES` — список разрешённых публичных учебных репозиториев через запятую в формате `владелец/репозиторий`. В редакторе вставьте `https://github.com/владелец/репозиторий` и нажмите «Загрузить по ссылке». Загружается ZIP ветки по умолчанию, к нему применяются те же ограничения, что и к ручной загрузке. Для SCA по репозиторию без справочника задайте `CYBER_GARDEN_ADVISORIES` на сервере.
+
+### Ежедневный запуск
+
+Загрузите учебный проект. В ноде «Запуск» выберите «Каждый день», задайте время и часовой пояс IANA, например `Europe/Moscow`, затем нажмите «Закрепить загруженный проект» и сохраните сценарий. FastAPI запускает его при работающем сервере, даже если редактор закрыт. Используется закреплённая версия проекта. Для новой версии загрузите её, закрепите и снова сохраните сценарий.
+
+Время и отчёты сохраняются в PostgreSQL. Если сервер был недоступен в момент запуска, после включения выполнится один просроченный запуск и расписание продолжится по следующему времени. Автоматический запуск использует локальную модель, если она настроена. Если модель требует внешнего согласия, отчёт получает подсказки по правилам сканеров. Чтобы остановить будущие запуски, сохраните сценарий в режиме «Вручную».
 
 При разработке сверяйте изменения API с фронтендом и проверяйте их на синтетических данных. Анализаторы сами ищут проблемы. LLM будет объяснять уже найденное. Ключи и токены хранятся на бэкенде.
 
@@ -92,7 +98,7 @@ Updated November 21, 2026.
 - SAST no longer stalls on a file with thousands of access rules: one such file took 11 s, now five take 0.2 s.
 - Moving the site to our own domain through a VPS is prepared: `tools/vps/setup_relay.sh` and `-Relay` in `tools/start_site.ps1`. Not yet tested on the live VPS.
 - Finished reports offer a `findings.json` download in the organizers' format. The export matched all 15 reference findings and excluded all 6 safe controls in the training archive.
-- Scheduled runs and additional conditions are still pending.
+- Daily schedules, finding-count comparisons and RE2 conditions are available. Expand a node in the report to see active connections, transferred counts and up to five finding previews per connection.
 
 Update this section in the same commit as each major change. Record what works, how it was verified, and what remains so the next chat or teammate can pick up from here.
 
@@ -105,16 +111,18 @@ The editor uses FastAPI at `127.0.0.1:8000` by default. You can change the addre
 ### Run your first scan
 
 1. Create the [sample ZIP](#sample-zip) or use a project supplied by the organizers. Upload only approved training projects. ZIPs are limited to 10 MiB, 40 MiB uncompressed, and 2,000 entries.
-2. In the editor, select the ZIP, click **Загрузить** (Upload), then **Запустить** (Run). The starter workflow has a manual trigger, a secret scan, and a severity condition.
+2. In the editor, click **Выбрать ZIP** (Choose ZIP), wait for the upload, then click **Запустить** (Run). The starter workflow has a manual trigger, a secret scan, and a severity condition.
 3. The sample produces one `high` finding at `application.properties:1`, and the condition matches. The report omits the password value. Reopen saved workflows from **Мои сценарии** (My Workflows) or download the graph from **Файл** (File).
 
 To call the API directly, use the [requests and sample graph](#workflow-api). To bring over data from the old SQLite prototype, start PostgreSQL and run the [import](#database) before FastAPI. The import preserves IDs and skips records already imported.
 
 For a full scan, upload the organizers' training archive with `vulnerability-database/vulnerabilities.json`. Add **Анализ зависимостей** (SCA) and **Статический анализ** (SAST) from the catalog and connect them to the graph. SCA reads Gradle dependency versions, prefers `gradle.lockfile`, and checks versions against the offline Maven catalog. For a ZIP with source files only, set `CYBER_GARDEN_ADVISORIES` to the catalog path before starting the API. SAST checks Kotlin with basic rules for SQL, TLS, CORS and authorization. Review SAST findings in context.
 
-The prototype uses one shared workspace. The demo proxy controls access. See the [security audit](docs/security.md) for details. Scheduled runs are still in progress.
+The prototype uses one shared workspace. The demo proxy controls access. See the [security audit](docs/security.md) for details.
 
 To import by URL, configure `CYBER_GARDEN_REPOSITORIES` before starting the API with a comma-separated list of approved public training repositories in `owner/repo` format. Enter `https://github.com/owner/repo` in the editor. The default branch ZIP is subject to the same limits as a manual upload. Set `CYBER_GARDEN_ADVISORIES` for repositories without an SCA catalog.
+
+For daily runs, upload an approved project, set the trigger to **Каждый день**, enter a local time and IANA time zone, bind the uploaded project and save the workflow. The API runs the pinned snapshot even with the editor closed. Change the trigger back to manual and save to disable future runs.
 
 Coordinate API changes with the frontend and test them with synthetic data. The scanners find issues. The LLM will explain those findings. Keep API keys and tokens on the backend.
 
@@ -221,6 +229,14 @@ To demo the whole site from one PC, run `tools\start_site.ps1` (`-Url` prints th
 Схемы запросов и ответов / Request and response schemas — [OpenAPI JSON](http://127.0.0.1:8000/openapi.json). Ошибки / Errors — `{code, message}`.
 
 Для графа нужен один триггер без входов. Все ноды должны быть достижимы из него, циклы запрещены. Выход условия указывается через `sourceHandle` со значением `"true"` или `"false"`. / Use one trigger with no incoming edges. Every node must be reachable from it, and the graph must be acyclic. Edges leaving a condition need a `sourceHandle` of `"true"` or `"false"`.
+
+Режимы условия / Condition modes:
+
+- `{"minSeverity":"high"}` — хотя бы одна находка заданной критичности или выше / at least one finding at or above the given severity.
+- `{"conditionMode":"count","countMinSeverity":"high","comparison":"ge","threshold":2}` — сравнение количества отфильтрованных находок / compare the number of findings after filtering by severity. Operators: `eq`, `ne`, `lt`, `le`, `gt`, `ge`.
+- `{"conditionMode":"regex","field":"file","pattern":"[.]kt$"}` — совпадение с полем хотя бы одной находки / match a field on any finding. Fields: `file`, `ruleId`, `message`, `cve`, `advisoryId`. [Синтаксис RE2 / RE2 syntax](https://github.com/google/re2/wiki/Syntax).
+
+Для ежедневного запуска задайте у триггера `{"mode":"daily","scheduleSourceId":"<sourceId>","scheduleTime":"14:00","scheduleTimezone":"Europe/Moscow"}`. / Set the trigger config to these fields to enable daily runs.
 
 Пример для `POST /workflows` / Example body for `POST /workflows`:
 

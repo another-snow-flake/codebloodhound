@@ -1,5 +1,5 @@
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from typing import Annotated
 from uuid import uuid4
 
@@ -14,8 +14,10 @@ from .exports import export_findings
 from .llm import LlmError, ModelSpec, check_model, client_for, default_model_id, list_model_options, resolve_model
 from .repositories import download_repository
 from .runner import execute_plan, plan_run, validate_edges, validate_node_config
+from .schedule import daily_schedule
+from .scheduler import poll_schedules
 from .schemas import (
-    ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, Node, NodeResult,
+    ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, Node,
     NodeTemplate, NodeTemplateDraft, Position, RepositorySourceRequest,
     RunChatRequest, RunChatResponse, RunCreated,
     RunListItem, RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
@@ -59,7 +61,13 @@ def create_app(dsn: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         storage.initialize()
-        yield
+        scheduler = asyncio.create_task(poll_schedules(storage))
+        try:
+            yield
+        finally:
+            scheduler.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler
 
     app = FastAPI(title="Cyber Garden Workflow API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
@@ -137,9 +145,18 @@ def create_app(dsn: str | None = None) -> FastAPI:
     def list_workflows() -> list[Workflow]:
         return storage.list_workflows()
 
+    def validate_saved_workflow(draft: WorkflowDraft):
+        schedule = daily_schedule(draft)
+        if schedule is None:
+            validate_edges(draft)
+            return
+        plan_run(draft)
+        if storage.get_source(schedule.source_id) is None:
+            raise ApiProblem(404, "source_not_found", "The project selected for the schedule was not found.")
+
     @app.post("/workflows", status_code=201, response_model_exclude_none=True)
     def create_workflow(draft: WorkflowDraft) -> Workflow:
-        validate_edges(draft)
+        validate_saved_workflow(draft)
         workflow = Workflow(id=uuid4().hex, **draft.model_dump())
         storage.save_workflow(workflow)
         return workflow
@@ -154,7 +171,7 @@ def create_app(dsn: str | None = None) -> FastAPI:
     @app.put("/workflows/{workflow_id}", response_model_exclude_none=True)
     def update_workflow(workflow_id: str, draft: WorkflowDraft) -> Workflow:
         get_workflow(workflow_id)
-        validate_edges(draft)
+        validate_saved_workflow(draft)
         workflow = Workflow(id=workflow_id, **draft.model_dump())
         storage.save_workflow(workflow)
         return workflow
@@ -174,20 +191,7 @@ def create_app(dsn: str | None = None) -> FastAPI:
         archive = storage.get_source(request.sourceId)
         if archive is None:
             raise ApiProblem(404, "source_not_found", "Project source not found.")
-        report = RunReport(
-            runId=uuid4().hex,
-            workflowId=workflow_id,
-            createdAt=datetime.now(timezone.utc),
-            status="queued",
-            nodes=[
-                NodeResult(
-                    nodeId=node.id, status="queued", type=node.type,
-                    label=node.config["title"] if node.type == "custom" else None,
-                )
-                for node in workflow.nodes
-            ],
-            findings=[],
-        )
+        report = RunReport.for_workflow(workflow)
         storage.save_run(report)
         tasks.add_task(execute_plan, storage, report, plan, request.sourceId, archive, model)
         return RunCreated(runId=report.runId, status="queued")

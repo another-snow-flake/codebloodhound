@@ -93,6 +93,13 @@ class ModelSettingsTest(unittest.TestCase):
             resolve_model("deepseek:deepseek-flash", allow_external=True)
         self.assertEqual(error.exception.code, "no_api_key")
 
+    def test_deepseek_configured_as_server_default_still_requires_consent(self):
+        with mock.patch.dict(os.environ, {"LLM_PROVIDER": "deepseek", "DEEPSEEK_MODEL": "deepseek-flash"}):
+            with self.assertRaises(LlmError) as error:
+                resolve_model(None)
+            self.assertEqual(error.exception.code, "consent_required")
+            self.assertEqual(resolve_model(None, allow_external=True).provider, "deepseek")
+
     def test_unknown_or_malformed_models_are_rejected(self):
         for model_id in ("deepseek:other", "openai:gpt", "local:", "local:../../x y"):
             with self.subTest(model_id=model_id), self.assertRaises(LlmError) as error:

@@ -75,6 +75,44 @@ class CustomNodeRunTest(unittest.TestCase):
         self.assertEqual(results["c"].output, {"passed": 1})
         self.assertEqual(results["yes"].output, {"matched": True})
         self.assertEqual(results["no"].output, {"matched": False})
+        finding_id = report.findings[0].id
+        self.assertEqual(results["c"].inputs[0].findingIds, [finding_id])
+        self.assertEqual([(item.port, item.nodeId) for item in results["c"].outputs],
+                         [("out1", "yes"), ("out2", "no")])
+        self.assertEqual(results["yes"].inputs[0].findingIds, [finding_id])
+
+    def test_count_and_regex_send_data_only_to_the_matching_branch(self):
+        nodes = [
+            node("t", "trigger"), node("s", "secrets"),
+            node("count", "condition", conditionMode="count", comparison="ge", threshold=1),
+            node("regex", "condition", conditionMode="regex", field="file", pattern=r"\.properties$"),
+            custom("selected"), custom("skipped"),
+        ]
+        workflow = draft(nodes, [
+            edge("t", "s"), edge("s", "count"), edge("count", "regex", out="true"),
+            edge("regex", "selected", out="true"), edge("regex", "skipped", out="false"),
+        ])
+        archive = io.BytesIO()
+        with ZipFile(archive, "w") as project:
+            project.writestr("application.properties", "app.password=synthetic-branch-test")
+        report = RunReport(runId="run", workflowId="workflow", nodes=[NodeResult(nodeId=n["id"]) for n in nodes])
+        execute_plan(Mock(), report, plan_run(workflow), "source", archive.getvalue())
+        results = {result.nodeId: result for result in report.nodes}
+        self.assertEqual(results["count"].output, {"mode": "count", "count": 1, "matched": True})
+        self.assertEqual(results["regex"].output, {"mode": "regex", "count": 1, "matched": True})
+        self.assertEqual([item.port for item in results["regex"].outputs], ["true"])
+        self.assertEqual(results["selected"].inputs[0].findingCount, 1)
+        self.assertEqual(results["skipped"].status, "skipped")
+        self.assertEqual(results["skipped"].inputs, [])
+
+    def test_unsupported_regex_is_rejected_before_running(self):
+        workflow = draft(
+            [node("t", "trigger"), node("rx", "condition", conditionMode="regex", field="file", pattern=r"(?=secret)")],
+            [edge("t", "rx")],
+        )
+        with self.assertRaises(ApiProblem) as context:
+            plan_run(workflow)
+        self.assertEqual(context.exception.code, "invalid_condition_regex")
 
 
 class TemplateStorage:

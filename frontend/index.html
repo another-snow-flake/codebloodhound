@@ -104,7 +104,7 @@ svg.edges text{font-size:11px;fill:var(--mute)}
 .h:hover{border-color:var(--acc);background:var(--acc)}
 .h.in{left:-8px;top:29px}.h.out{right:-8px;top:29px}
 .h.t{right:-8px;top:17px;border-color:var(--ok)}.h.f{right:-8px;top:43px;border-color:var(--bad)}
-.insp{position:absolute;top:12px;right:12px;width:268px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.insp{position:absolute;top:12px;right:12px;width:268px;max-height:calc(100% - 24px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .insp h3,.ph h3{margin:0 0 8px;font-size:14px}
 label.f{display:block;margin:8px 0 4px;color:var(--mute);font-size:12.5px}
 .insp select,.insp input,.modal select,.modal input[type=text],.modal input[type=password]{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:6px 8px}
@@ -117,8 +117,14 @@ label.f{display:block;margin:8px 0 4px;color:var(--mute);font-size:12.5px}
 .rh b{font-size:14px}
 .rb{overflow:auto;padding:0 12px 12px;display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px}
 .rb h4{margin:4px 0 6px;font-size:13px;color:var(--mute);font-weight:500}
-.nl div{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.nl>div,.node-transfer summary{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
 .nl small{color:var(--mute)}
+.node-transfer summary{cursor:pointer}
+.node-transfer summary:before{content:"▸";color:var(--mute)}
+.node-transfer[open] summary:before{content:"▾"}
+.node-transfer summary span{flex:1}
+.transfer-list{list-style:none;padding:0;margin:5px 0 10px}
+.transfer-list>li{border-left:2px solid var(--line);margin:4px 0;padding-left:8px;overflow-wrap:anywhere}
 .finding-level{background:var(--card);border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
 .finding-level summary{cursor:pointer;padding:8px 10px;font-size:13px;font-weight:600}
 .finding-level summary:hover{background:var(--panel);border-radius:8px}
@@ -397,7 +403,7 @@ main.ai-open .insp{right:372px}
 <div class="toast" id="toast" role="status"></div>
 
 <script>
-const T={trigger:{n:"Запуск",d:"Ручной запуск",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Ветвление по критичности",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
+const T={trigger:{n:"Запуск",d:"Вручную или по расписанию",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Критичность, количество или регулярное выражение",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
 const SCANNERS=new Set(["secrets","sca","sast"]);
 const SUPPORTED=new Set(["trigger","condition","ai","notify","custom",...SCANNERS]);
 // Свои ноды: название, цвет и число портов хранятся в config. Порты с номерами («in2», «out3»)
@@ -413,7 +419,7 @@ function inHandle(n,k){return n.type==="custom"&&ports(n).ins>1?"in"+k:null}
 function handleIndex(n,h,out){if(!h)return 1;if(h==="true")return 1;if(h==="false")return 2;return +h.replace(/\D/g,"")||1}
 function nodeHeight(n){const p=ports(n);return Math.max(72,22*Math.max(p.ins,p.outs)+28)+(n.config?.note?18:0)}
 function portY(n,k,count){return Math.round(nodeHeight(n)*k/(count+1))}
-const SEV=["low","medium","high","critical"],SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
+const SEVRU={low:"низкая",medium:"средняя",high:"высокая",critical:"критичная"};
 const REPORT_LEVELS={critical:"Критические",high:"Высокие",medium:"Средние",low:"Низкие"};
 const RULES={
   "hardcoded-secret":"Секрет в коде",
@@ -448,7 +454,7 @@ const WEBHOOK_ERRORS={
   webhook_timeout:"Получатель webhook не ответил вовремя.",
   webhook_connection_error:"Не удалось подключиться к получателю webhook."
 };
-const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Бэкенд пока запускает только ручной режим.",invalid_node_config:"Заполните настройки условия: нужна минимальная критичность.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
+const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Выберите ручной или ежедневный запуск.",invalid_schedule:"Проверьте время и часовой пояс расписания, например Europe/Moscow.",schedule_source_required:"Загрузите проект и закрепите его в настройках запуска.",invalid_node_config:"Проверьте настройки ноды.",invalid_condition:"Проверьте режим, критичность и порог в настройках условия.",invalid_condition_regex:"Введите корректное регулярное выражение RE2 до 160 символов. Обратные ссылки и проверки вперёд или назад не поддерживаются.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
 // локальная разработка: API на :8000; сайт через tools/serve_site.py: API на том же адресе под /api
@@ -463,7 +469,7 @@ async function api(path,opt){let r;
   return b}
 const JH={"Content-Type":"application/json"};
 let wf={id:"",name:"Поиск секретов",nodes:[],edges:[]};
-let sel=null,sourceId=null,report=null,pick=null,running=false,uid=1;
+let sel=null,sourceId=null,sourceName="",report=null,pick=null,running=false,uid=1;
 let historicalReport=false;
 const pan={x:0,y:0};
 const nid=()=>{let i;do{i="n"+uid++}while(wf.nodes.some(n=>n.id===i));return i};
@@ -503,7 +509,7 @@ function nodeIssuesBlock(){if(historicalReport||!report||sel?.t!=="n")return"";c
     ${iss.items.map(it=>`<div class="ni"><b><span class="sev ${esc(it.severity)}" aria-hidden="true"></span>${esc(it.g?.title||label(it.rule))}</b> <small>· ${SEVRU[it.severity]||esc(it.severity)} · ${plural(it.findings.length,"место","места","мест")}</small>
       <p>${esc(it.g?.explanation||it.message)}</p>${it.g?`<p><i>Что сделать:</i> ${esc(it.g.action)}</p>`:""}
       <ul>${it.findings.map(findingItem).join("")}</ul></div>`).join("")}</div>`}
-function render(){
+function render(refreshInspector=true){
   const bd=$("#board");bd.querySelectorAll(".node").forEach(e=>e.remove());
   for(const n of wf.nodes){const e=document.createElement("div");e.className="node";e.dataset.id=n.id;
     const s=historicalReport?null:report?.nodes.find(x=>x.nodeId===n.id)?.status;if(s)e.classList.add("s-"+s);
@@ -519,7 +525,7 @@ function render(){
     e.style.height=nodeHeight(n)+"px";
     if(sel?.t==="n"&&sel.id===n.id)e.classList.add("sel");
     placeNode(e,n);bd.appendChild(e)}
-  edges();inspector();if(report&&$("#repBody").dataset.issuesFor!==(sel?.t==="n"?sel.id:""))renderRep()}
+  edges();if(refreshInspector)inspector();if(report&&$("#repBody").dataset.issuesFor!==(sel?.t==="n"?sel.id:""))renderRep()}
 function placeNode(element,node){
   element.style.setProperty("--node-x",node.position.x+"px");
   element.style.setProperty("--node-y",node.position.y+"px")
@@ -528,7 +534,10 @@ function pt(n,out,h){const p=n.position,c=ports(n);return out?[p.x+190,p.y+portY
 function edges(tmp){const sv=$("#edgeLayer");let h="";
   for(const e of wf.edges){const a=wf.nodes.find(n=>n.id===e.source),b=wf.nodes.find(n=>n.id===e.target);if(!a||!b)continue;
     const[x1,y1]=pt(a,1,e.sourceHandle),[x2,y2]=pt(b,0,e.targetHandle),dx=Math.max(40,(x2-x1)/2);
-    const act=!historicalReport&&report?.nodes.find(x=>x.nodeId===e.target)?.status==="succeeded";
+    const sourceResult=report?.nodes.find(x=>x.nodeId===e.source);
+    const act=!historicalReport&&(sourceResult?.outputs?
+      sourceResult.outputs.some(x=>x.nodeId===e.target&&x.port===(e.sourceHandle??null)):
+      report?.nodes.find(x=>x.nodeId===e.target)?.status==="succeeded");
     h+=`<path data-e="${esc(e.id)}" class="${sel?.t==="e"&&sel.id===e.id?"on":""} ${act?"act":""}" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}"/>`;
     if(e.sourceHandle)h+=`<text x="${x1+8}" y="${y1-6}">${e.sourceHandle==="true"?"да":e.sourceHandle==="false"?"нет":e.sourceHandle.slice(3)}</text>`}
   if(tmp)h+=`<path d="M${tmp[0]},${tmp[1]} L${tmp[2]},${tmp[3]}" style="stroke-dasharray:5 4;pointer-events:none"/>`;sv.innerHTML=h}
@@ -591,7 +600,7 @@ bd.addEventListener("pointerdown",ev=>{
   if(ep){sel={t:"e",id:ep.dataset.e};render();return}
   sel=null;render()});
 addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
-function clearReport(){report=null;historicalReport=false;pick=null;render();renderRep();renderAI()}
+function clearReport(refreshInspector=true){report=null;historicalReport=false;pick=null;render(refreshInspector);renderRep();renderAI()}
 function del(){if(!sel||running)return;if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
 let webhookRefs=[],webhookListError="";
 function webhookInspector(selected){
@@ -605,6 +614,34 @@ function webhookInspector(selected){
     <select id="webhookRef" data-k="webhookRef"><option value="">Выберите получателя</option>${refs}${missing}</select>
     <p class="note">${esc(note)}</p>`;
 }
+const CONDITION_DEFAULTS={conditionMode:"severity",minSeverity:"high",countMinSeverity:"low",comparison:"ge",threshold:1,field:"file"};
+const TRIGGER_DEFAULTS={mode:"manual",scheduleTime:"09:00",scheduleTimezone:Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC"};
+function triggerInspector(config){
+  const select=`<label class="f" for="triggerMode">Режим</label><select id="triggerMode" data-k="mode">
+    <option value="manual">Вручную</option><option value="daily">Каждый день</option></select>`;
+  if(config.mode!=="daily")return select+`<p class="note">Нажмите «Запустить», чтобы проверить проект, выбранный над холстом.</p>`;
+  const name=config.scheduleSourceName||(config.scheduleSourceId?"Проект закреплён":"Проект не закреплён");
+  return select+`<label class="f" for="scheduleTime">Время запуска</label><input id="scheduleTime" type="time" data-k="scheduleTime" step="60">
+    <label class="f" for="scheduleTimezone">Часовой пояс</label><input id="scheduleTimezone" type="text" data-k="scheduleTimezone" placeholder="Europe/Moscow" maxlength="100">
+    <p class="note"><b>${esc(name)}</b></p><button class="btn" id="bindSchedule" ${sourceId&&!running?"":"disabled"}>Закрепить загруженный проект</button>
+    <p class="note">Сохраните сценарий, чтобы включить расписание. Будет проверяться эта загруженная версия проекта.</p>`
+}
+function conditionInspector(config){
+  const optionList=options=>Object.entries(options).map(([value,label])=>`<option value="${value}">${label}</option>`).join("");
+  const select=(key,label,options)=>`<label class="f" for="${key}">${label}</label><select id="${key}" data-k="${key}">${optionList(options)}</select>`;
+  let html=select("conditionMode","Проверка",{severity:"Критичность",count:"Количество находок",regex:"Регулярное выражение"});
+  if(config.conditionMode==="count"){
+    html+=select("countMinSeverity","Учитывать находки",{...SEVRU,low:"любой критичности"});
+    html+=select("comparison","Сравнение",{eq:"Равно",ne:"Не равно",lt:"Меньше",le:"Меньше или равно",gt:"Больше",ge:"Больше или равно"});
+    return html+`<label class="f" for="threshold">Порог</label><input id="threshold" type="number" data-k="threshold" min="0" step="1">`
+  }
+  if(config.conditionMode==="regex"){
+    html+=select("field","Поле находки",{file:"Путь к файлу",ruleId:"Код правила",message:"Описание",cve:"CVE",advisoryId:"Advisory ID"});
+    return html+`<label class="f" for="pattern">Регулярное выражение</label><input id="pattern" type="text" data-k="pattern" maxlength="160" spellcheck="false">
+      <p class="note">Выход «Да» срабатывает, если выражение совпало хотя бы с одной находкой.</p>`
+  }
+  return html+select("minSeverity","Минимальная критичность",SEVRU)+`<p class="note">Выход «Да» срабатывает, если есть находка этой критичности или выше.</p>`
+}
 function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
   const box=document.createElement("div");box.className="insp";let h="";
   if(sel.t==="e")h=`<h3>Связь</h3><p class="note">Выбранную связь можно удалить.</p><button class="btn" id="delSel" style="margin-top:8px">Удалить связь</button>`;
@@ -614,8 +651,8 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
       <div><label class="f">Выходов</label><select data-c="outputs">${[0,1,2,3,4].map(v=>`<option ${v===+c.outputs?"selected":""}>${v}</option>`).join("")}</select></div></div>
       <label class="f">Цвет</label><div class="swatches">${NODE_COLORS.map(col=>`<button type="button" data-col="${col}" class="${col===c.color?"on":""}" style="background:${col}" aria-label="Цвет ${col}"></button>`).join("")}<input type="color" data-c="color" value="${isColor(c.color)?c.color:"#68766d"}" aria-label="Свой цвет"></div>
       <p class="note">Передаёт находки со входов на все выходы. Лишние связи при уменьшении портов удаляются.</p>`;
-    if(n.type==="trigger")h+=`<p class="note">Нажмите «Запустить», чтобы проверить проект, выбранный над холстом.</p>`;
-    else if(n.type==="condition")h+=`<label class="f" for="minSeverity">Минимальная критичность</label><select id="minSeverity" data-k="minSeverity">${SEV.map(s=>`<option value="${s}">${SEVRU[s]}</option>`).join("")}</select><p class="note">Выход «Да» срабатывает, если есть хотя бы одна находка этой критичности или выше. В остальных случаях срабатывает «Нет».</p>`;
+    if(n.type==="trigger")h+=triggerInspector(c);
+    else if(n.type==="condition")h+=conditionInspector(c);
     else if(n.type==="secrets")h+=`<p class="note">Ищет пароли, токены и ключи в коде и конфигурации. В отчёте указывает файл и строку без значения секрета.</p>`;
     else if(n.type==="sca")h+=`<p class="note">Сверяет версии зависимостей Gradle со справочником Maven. Справочник берётся из архива или из настроек сервера.</p>`;
     else if(n.type==="sast")h+=`<p class="note">Проверяет Kotlin-код на ошибки в SQL, настройках TLS и CORS, правилах доступа к маршрутам и записям.</p>`;
@@ -627,12 +664,28 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
       <button class="btn" id="saveTpl" style="margin-top:8px">Сохранить ноду в библиотеку</button>`;
     h+=`<button class="btn" id="delSel" style="margin-top:10px">Удалить ноду</button>`}
   box.innerHTML=h;$(".canvas").appendChild(box);box.addEventListener("pointerdown",e=>e.stopPropagation());
-  box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id);el.value=n.config[el.dataset.k]??({minSeverity:"high",mode:"manual"}[el.dataset.k]||"");
-    if(el.dataset.k==="minSeverity"&&!n.config.minSeverity)n.config.minSeverity="high";
+  box.querySelectorAll("[data-k]").forEach(el=>{const n=wf.nodes.find(x=>x.id===sel.id),key=el.dataset.k;
+    el.value=Object.hasOwn(n.config,key)?n.config[key]??"":CONDITION_DEFAULTS[key]??TRIGGER_DEFAULTS[key]??"";
     el.disabled=running;
-    el.onchange=()=>{n.config[el.dataset.k]=el.value;clearReport()}});
+    el.onchange=()=>{
+      n.config[key]=el.type==="number"?(el.value===""?null:Number(el.value)):el.value;
+      if(key==="conditionMode"){
+        const keys={severity:["minSeverity"],count:["countMinSeverity","comparison","threshold"],regex:["field"]}[el.value];
+        for(const name of keys){if(!Object.hasOwn(n.config,name))n.config[name]=CONDITION_DEFAULTS[name]}
+      }
+      if(key==="mode"&&el.value==="daily"){
+        n.config.scheduleTime??=TRIGGER_DEFAULTS.scheduleTime;
+        n.config.scheduleTimezone??=TRIGGER_DEFAULTS.scheduleTimezone
+      }
+      clearReport(key==="conditionMode"||key==="mode")
+    }});
   const node=sel.t==="n"&&wf.nodes.find(x=>x.id===sel.id);
   if(node){const note=box.querySelector("#nodeNote");
+    box.querySelector("#bindSchedule")?.addEventListener("click",()=>{
+      if(!sourceId||running)return;
+      node.config.scheduleSourceId=sourceId;node.config.scheduleSourceName=sourceName;
+      clearReport()
+    });
     if(note){note.disabled=running;note.oninput=()=>{node.config.note=note.value};note.onchange=()=>{node.config.note=note.value.trim();if(!node.config.note)delete node.config.note;render()}}
     box.querySelector("#saveTpl")?.addEventListener("click",()=>saveTemplate(node));
     box.querySelectorAll("[data-c]").forEach(el=>{el.disabled=running;el.onchange=()=>{const k=el.dataset.c;
@@ -798,7 +851,7 @@ async function loadSource(path,options,label){
   tag.textContent="Загружаем проект…";
   try{
     const result=await api(path,{method:"POST",...options});
-    sourceId=result.sourceId;tag.textContent="загружен: "+label;
+    sourceId=result.sourceId;sourceName=label;tag.textContent="загружен: "+label;
     tag.classList.add("ok");$("#src").classList.remove("need");clearReport()
   }catch(e){tag.textContent=previous;toast(REPO_ERRORS[e.code]||e.message)}
   finally{sourceLoading=false;$("#upBtn").disabled=false;$("#repoBtn").disabled=false}
@@ -823,13 +876,13 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length!==1)return"В сценарии должен быть ровно один запуск";
   if(wf.nodes.some(n=>n.type!=="trigger"&&!wf.edges.some(e=>e.target===n.id)))return"У одной из нод нет входящей связи";
   const bad=wf.nodes.filter(n=>!SUPPORTED.has(n.type));if(bad.length)return`Нода «${esc(nodeName(bad[0]))}» пока не выполняется бэкендом. Уберите её, чтобы запустить сценарий.`;
-  if(wf.nodes.some(n=>n.type==="condition"&&!n.config.minSeverity))return ERR.invalid_node_config;
   if(wf.nodes.some(n=>n.type==="notify"&&!n.config.webhookRef))return WEBHOOK_ERRORS.invalid_webhook_ref;
   return null}
 $("#runBtn").onclick=async()=>{if(running)return;const err=validate();if(err)return toast(err);
   if(sourceLoading)return toast("Дождитесь загрузки проекта");
-  if(!sourceId){$("#src").classList.add("need");return toast("Загрузите учебный ZIP или репозиторий по ссылке")}
-  const runSource=sourceId;
+  const schedule=wf.nodes.find(n=>n.type==="trigger"&&n.config.mode==="daily")?.config;
+  const runSource=sourceId||schedule?.scheduleSourceId;
+  if(!runSource){$("#src").classList.add("need");return toast("Загрузите учебный ZIP или репозиторий по ссылке")}
   running=true;$("#runBtn").disabled=true;$("#runBtn").textContent="Идёт запуск…";pick=null;inspector();renderChat();
   try{await save();
     const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource,...modelChoice()})});
@@ -861,7 +914,8 @@ async function loadHistory(view){
       const button=document.createElement("button");
       button.className="cat";
       const time=run.createdAt?historyTime.format(new Date(run.createdAt)):"Дата не записана";
-      button.textContent=`${time} · ${run.runId.slice(0,8)} · ${stLabel(run.status)} · ${plural(run.findingCount,"находка","находки","находок")}`;
+      const mode=run.triggerMode==="daily"?" · по расписанию":"";
+      button.textContent=`${time} · ${run.runId.slice(0,8)} · ${stLabel(run.status)}${mode} · ${plural(run.findingCount,"находка","находки","находок")}`;
       button.onclick=()=>openHistoryReport(view,run.runId,button);
       list.appendChild(button)
     }
@@ -904,6 +958,7 @@ $("#findingsDownload").onclick=async event=>{
   finally{button.disabled=false}
 };
 function nodeNote(n,s){const o=s.output;
+  if(n.type==="trigger"&&o?.sourceId)return "<br><small>Проверяется загруженный проект</small>";
   if(n.type==="notify"&&o){
     if(o.delivered)return `<br><small>Отправлено (HTTP ${esc(o.statusCode)})</small>`;
     const reason=WEBHOOK_ERRORS[o.errorCode]||(o.statusCode?`Получатель вернул HTTP ${o.statusCode}.`:s.error);
@@ -913,7 +968,9 @@ function nodeNote(n,s){const o=s.output;
     if(o.aiAvailable)return`<br><small>${aiDoneText(o)}</small>`;
     const st=AI_STAGES.find(x=>x[0]===o.stage);if(st&&s.status==="running")return`<br><small>${st[1]}…</small>`}
   if(s.error)return`<br><small style="color:var(--bad)">${esc(s.error==="Node execution failed."?"Нода завершилась с ошибкой":s.error)}</small>`;
-  if(!o)return"";if(n.type==="custom")return`<br><small>передано находок: ${+o.passed||0}</small>`;if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;if(n.type==="condition")return`<br><small>условие ${o.matched?"выполнено (да)":"не выполнено (нет)"}</small>`;return""}
+  if(!o)return"";if(n.type==="custom")return`<br><small>передано находок: ${+o.passed||0}</small>`;if(SCANNERS.has(n.type))return`<br><small>находок: ${(o.findings||[]).length}</small>`;
+  if(n.type==="condition")return`<br><small>ветка «${o.matched?"Да":"Нет"}»${o.count==null?"":` · найдено совпадений: ${esc(o.count)}`}</small>`;
+  return""}
 function findingItem(f) {
   const location = f.line == null ? f.file : f.file + ":" + f.line;
   const advisory = f.cve || f.advisoryId;
@@ -921,6 +978,22 @@ function findingItem(f) {
     <b>${esc(location)}</b>${advisory ? ` <small>${esc(advisory)}</small>` : ""}
     <span>${esc(f.message)}</span>
   </button></li>`;
+}
+
+function transferList(transfers,input,names,findings){
+  if(!transfers.length)return `<p class="note">${input?"Ничего не получено.":"Данные дальше не передавались."}</p>`;
+  return `<ul class="transfer-list">${transfers.map(transfer=>{
+    const port=transfer.port==="true"?"Выход «Да»":transfer.port==="false"?"Выход «Нет»":
+      (input?"Вход":"Выход")+(transfer.port?" "+transfer.port.slice(input?2:3):"");
+    const neighbor=names.get(transfer.nodeId)||transfer.nodeId;
+    const preview=transfer.findingIds.map(id=>findings.get(id)).filter(Boolean);
+    const analyses=transfer.analysisNodeIds.map(id=>names.get(id)||id);
+    return `<li><b>${esc(port)}${neighbor?(input?" ← ":" → ")+esc(neighbor):""}</b>
+      <p class="note">${plural(transfer.findingCount,"находка","находки","находок")} · AI-отчётов: ${esc(transfer.analysisCount)}</p>
+      ${preview.length?`<ul class="finding-items">${preview.map(findingItem).join("")}</ul>`:""}
+      ${transfer.findingCount>preview.length?`<p class="note">Показано ${preview.length} из ${esc(transfer.findingCount)}.</p>`:""}
+      ${analyses.length?`<p class="note">AI-отчёты от: ${esc(analyses.join(", "))}.</p>`:""}</li>`
+  }).join("")}</ul>`
 }
 
 function renderFindings(findings, openGroups) {
@@ -960,24 +1033,34 @@ function renderFindings(findings, openGroups) {
 
 function renderRep(){const b=$("#repBody");$("#findingsDownload").hidden=!report||!["succeeded","failed"].includes(report.status);
   if(!report){delete b.dataset.runId;$("#repTag").textContent="запусков ещё не было";b.innerHTML=`<div class="empty">Загрузите проект и нажмите «Запустить» — здесь появятся статусы нод и находки.</div>`;return}
-  $("#repTag").textContent=(historicalReport?"Из истории · ":"")+report.runId.slice(0,8)+" · "+stLabel(report.status);
+  $("#repTag").textContent=(historicalReport?"Из истории · ":"")+report.runId.slice(0,8)+" · "+stLabel(report.status)+(report.triggerMode==="daily"?" · по расписанию":"");
   const fs=report.findings||[];
+  const findings=new Map(fs.map(f=>[f.id,f]));
+  const nodes=new Map(report.nodes.map(result=>[result.nodeId,
+    result.type?{type:result.type,config:{title:result.label}}:wf.nodes.find(n=>n.id===result.nodeId)]));
+  const names=new Map([...nodes].map(([id,node])=>[id,node?nodeName(node):id]));
   const sameRun=b.dataset.runId===report.runId;
-  const openGroups=new Set(sameRun?Array.from(b.querySelectorAll("details[open]"),e=>e.dataset.group):[]);
+  const openGroups=new Set(sameRun?Array.from(b.querySelectorAll("details[data-group][open]"),e=>e.dataset.group):[]);
+  const openTransfers=new Set(sameRun?Array.from(b.querySelectorAll(".node-transfer[open]"),e=>e.dataset.node):[]);
   const scrollTop=sameRun?b.scrollTop:0;
   b.dataset.runId=report.runId;
   b.dataset.issuesFor=sel?.t==="n"?sel.id:"";
   b.innerHTML=nodeIssuesBlock()+`<div><h4>Ноды</h4><div class="nl">${report.nodes.map(s=>{
-    const n=s.type?{type:s.type,config:{title:s.label}}:wf.nodes.find(x=>x.id===s.nodeId);
-    const name=n?nodeName(n):s.nodeId;
-    return `<div><span>${esc(name)}${n?nodeNote(n,s):""}</span><small>${stLabel(s.status)}</small></div>`
+    const n=nodes.get(s.nodeId);
+    const header=`<span>${esc(names.get(s.nodeId))}${n?nodeNote(n,s):""}</span><small>${stLabel(s.status)}</small>`;
+    if(!s.inputs||!s.outputs)return `<div>${header}</div>`;
+    return `<details class="node-transfer" data-node="${esc(s.nodeId)}" ${openTransfers.has(s.nodeId)?"open":""}>
+      <summary>${header}</summary>
+      <h4>Получено</h4>${transferList(s.inputs,true,names,findings)}
+      <h4>Передано</h4>${transferList(s.outputs,false,names,findings)}
+    </details>`
   }).join("")}</div></div>
   <div><h4>Находки (${fs.length})</h4>${renderFindings(fs,openGroups)}</div>`;
   b.scrollTop=scrollTop;
-  b.querySelectorAll(".finding-item").forEach(item=>item.onclick=()=>{
-    b.querySelector('.finding-item[aria-pressed="true"]')?.setAttribute("aria-pressed","false");
+  const findingButtons=b.querySelectorAll(".finding-item");
+  findingButtons.forEach(item=>item.onclick=()=>{
     pick=item.dataset.f;
-    item.setAttribute("aria-pressed","true");
+    findingButtons.forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.f===pick)));
     renderAI()
   })}
 let chatState = {runId: null, turns: [], pending: false, error: ""};

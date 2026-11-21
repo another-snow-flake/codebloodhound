@@ -1,24 +1,27 @@
 import re
 from collections.abc import Callable
 from graphlib import CycleError, TopologicalSorter
+from itertools import islice
 from typing import NamedTuple
 
 from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities, template_analysis
+from .conditions import evaluate_condition, validate_condition
 from .llm import LlmError, ModelSpec, client_for, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_kotlin_issues
-from .schemas import AiAnalysis, ApiProblem, Edge, Finding, Node, RunReport, WorkflowDraft
+from .schedule import daily_schedule
+from .schemas import AiAnalysis, ApiProblem, Edge, Finding, Node, NodeTransfer, RunReport, WorkflowDraft
 from .sources import find_secrets
 from .storage import Storage
 from .webhooks import WEBHOOK_REF, WebhookError, send_webhook
 
 
-SEVERITY_RANK = {severity: rank for rank, severity in enumerate(("low", "medium", "high", "critical"))}
 SCANNERS = {"secrets": find_secrets, "sca": find_vulnerable_dependencies, "sast": find_kotlin_issues}
 SUPPORTED_NODES = {"trigger", "condition", "ai", "notify", "custom", *SCANNERS}
 MAX_PORTS = 4
 MAX_NOTE = 1000
 COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+TRANSFER_PREVIEW_SIZE = 5
 
 
 def _port_count(node: Node, key: str) -> int:
@@ -30,6 +33,8 @@ def validate_node_config(node: Node) -> None:
     note = node.config.get("note", "")
     if not isinstance(note, str) or len(note) > MAX_NOTE:
         raise ApiProblem(422, "invalid_node_config", f"A node note must be text up to {MAX_NOTE} characters.")
+    if node.type == "condition":
+        validate_condition(node.config)
     if node.type != "custom":
         return
     title, color = node.config.get("title"), node.config.get("color")
@@ -69,6 +74,16 @@ class NodeContext(NamedTuple):
     findings: dict[str, Finding]
     analyses: dict[str, AiAnalysis]
 
+    def transfer(self, port: str | None, node_id: str | None = None) -> NodeTransfer:
+        return NodeTransfer(
+            nodeId=node_id,
+            port=port,
+            findingCount=len(self.findings),
+            analysisCount=len(self.analyses),
+            findingIds=list(islice(self.findings, TRANSFER_PREVIEW_SIZE)),
+            analysisNodeIds=list(islice(self.analyses, TRANSFER_PREVIEW_SIZE)),
+        )
+
 
 class AiNodeResult(NamedTuple):
     output: dict
@@ -102,8 +117,11 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
     triggers = [node for node in workflow.nodes if node.type == "trigger"]
     if len(triggers) != 1 or incoming[triggers[0].id]:
         raise ApiProblem(422, "invalid_workflow", "A run requires one trigger with no incoming edges.")
-    if triggers[0].config.get("mode", "manual") != "manual":
-        raise ApiProblem(422, "unsupported_trigger", "Only manual triggers can run in this build.")
+    mode = triggers[0].config.get("mode", "manual")
+    if mode not in ("manual", "daily"):
+        raise ApiProblem(422, "unsupported_trigger", "Use a manual or daily trigger.")
+    if mode == "daily":
+        daily_schedule(workflow)
 
     nodes_by_id = {node.id: node for node in workflow.nodes}
     dependencies = {node_id: {edge.source for edge in edges} for node_id, edges in incoming.items()}
@@ -117,10 +135,6 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
     for node in ordered:
         if node.type not in SUPPORTED_NODES:
             raise ApiProblem(422, "unsupported_node", f"The {node.type} node cannot run in this build yet.")
-        if node.type == "condition":
-            minimum = node.config.get("minSeverity")
-            if not isinstance(minimum, str) or minimum not in SEVERITY_RANK:
-                raise ApiProblem(422, "invalid_node_config", "Condition requires a valid config.minSeverity.")
         if node.type == "notify":
             ref = node.config.get("webhookRef")
             if not isinstance(ref, str) or not WEBHOOK_REF.fullmatch(ref):
@@ -207,16 +221,22 @@ def execute_plan(
     model: ModelSpec | None = None,
 ):
     results = {result.nodeId: result for result in report.nodes}
+    outgoing = {node.id: [] for node in plan.nodes}
+    for edges in plan.incoming.values():
+        for edge in edges:
+            outgoing[edge.source].append(edge)
     active_contexts: dict[tuple[str, str | None], NodeContext] = {}
     report.status = "running"
     storage.save_run(report)
     for node in plan.nodes:
         result = results[node.id]
         active_inputs = [
-            active_contexts[edge.source, edge.sourceHandle]
+            (edge, active_contexts[edge.source, edge.sourceHandle])
             for edge in plan.incoming[node.id]
             if (edge.source, edge.sourceHandle) in active_contexts
         ]
+        result.inputs = [context.transfer(edge.targetHandle, edge.source) for edge, context in active_inputs]
+        result.outputs = []
         if node.type != "trigger" and not active_inputs:
             result.status = "skipped"
             storage.save_run(report)
@@ -225,8 +245,8 @@ def execute_plan(
         result.status = "running"
         storage.save_run(report)
         context = NodeContext(
-            {key: finding for item in active_inputs for key, finding in item.findings.items()},
-            {key: analysis for item in active_inputs for key, analysis in item.analyses.items()},
+            {key: finding for _, item in active_inputs for key, finding in item.findings.items()},
+            {key: analysis for _, item in active_inputs for key, analysis in item.analyses.items()},
         )
         handle = None
         try:
@@ -238,10 +258,8 @@ def execute_plan(
                 context.findings.update((finding.id, finding) for finding in findings)
                 result.output = {"findings": [finding.model_dump(mode="json", exclude_unset=True) for finding in findings]}
             elif node.type == "condition":
-                minimum_rank = SEVERITY_RANK[node.config["minSeverity"]]
-                matched = any(SEVERITY_RANK[finding.severity] >= minimum_rank for finding in context.findings.values())
-                result.output = {"matched": matched}
-                handle = "true" if matched else "false"
+                result.output = evaluate_condition(node.config, context.findings.values())
+                handle = "true" if result.output["matched"] else "false"
             elif node.type == "ai":
                 def publish(output: dict, result=result):
                     result.output = output
@@ -267,8 +285,13 @@ def execute_plan(
                 })
                 result.output = {"delivered": True, "statusCode": status_code}
             result.status = "succeeded"
-            for active in (output_handles(node) if node.type == "custom" else {handle}):
+            handles = output_handles(node) if node.type == "custom" else {handle}
+            for active in handles:
                 active_contexts[node.id, active] = context
+            result.outputs = [
+                context.transfer(edge.sourceHandle, edge.target)
+                for edge in outgoing[node.id] if edge.sourceHandle in handles
+            ]
         except WebhookError as error:
             result.status = "failed"
             result.error = str(error)

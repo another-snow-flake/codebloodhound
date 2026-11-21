@@ -226,7 +226,7 @@ class ModelSpec:
 def resolve_model(model_id: str | None, allow_external: bool = False) -> ModelSpec:
     """Fix the model for one request before it runs.
 
-    No ID means the server environment's model. An explicit DeepSeek model needs
+    No ID means the server environment's model. DeepSeek always needs
     `allow_external`: the user agreed that findings may leave this machine.
     """
     if not model_id:
@@ -236,18 +236,17 @@ def resolve_model(model_id: str | None, allow_external: bool = False) -> ModelSp
         provider, model = choice
         if not model:
             raise LlmError("bad_config", "Set LOCAL_LLM_MODEL to a model served by the local provider.")
-        return ModelSpec(provider, model)
-
-    provider, _, model = model_id.partition(":")
-    if provider == "local" and LOCAL_MODEL_NAME.fullmatch(model):
-        return ModelSpec("local", model)
-    if provider == "deepseek" and model in _names("DEEPSEEK_MODELS", os.getenv("DEEPSEEK_MODEL", "deepseek-flash")):
+    else:
+        provider, _, model = model_id.partition(":")
+        options = _names("DEEPSEEK_MODELS", os.getenv("DEEPSEEK_MODEL", "deepseek-flash"))
+        if not ((provider == "local" and LOCAL_MODEL_NAME.fullmatch(model)) or (provider == "deepseek" and model in options)):
+            raise LlmError("unknown_model", "This model is not configured on the server.")
+    if provider == "deepseek":
         if not os.getenv("DEEPSEEK_API_KEY", "").strip():
             raise LlmError("no_api_key", "Set DEEPSEEK_API_KEY on the server to use DeepSeek.")
         if not allow_external:
             raise LlmError("consent_required", "Confirm that findings may be sent to DeepSeek.")
-        return ModelSpec("deepseek", model)
-    raise LlmError("unknown_model", "This model is not configured on the server.")
+    return ModelSpec(provider, model)
 
 
 def client_for(spec: ModelSpec) -> LlmClient:

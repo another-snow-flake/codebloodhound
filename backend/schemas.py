@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, JsonValue, StringConstraints
 
@@ -11,6 +12,7 @@ NodeType = Literal["trigger", "secrets", "sca", "sast", "condition", "ai", "noti
 SourceHandle = Annotated[str, StringConstraints(pattern=r"^(?:true|false|out[1-4])$")]
 TargetHandle = Annotated[str, StringConstraints(pattern=r"^in[1-4]$")]
 RunStatus = Literal["queued", "running", "succeeded", "failed"]
+TriggerMode = Literal["manual", "daily"]
 NodeStatus = Literal["queued", "running", "succeeded", "failed", "skipped"]
 Severity = Literal["low", "medium", "high", "critical"]
 
@@ -173,6 +175,15 @@ class LlmCheckResult(BaseModel):
     message: str | None = None
 
 
+class NodeTransfer(BaseModel):
+    nodeId: Identifier | None = None
+    port: str | None = None
+    findingCount: int
+    analysisCount: int
+    findingIds: list[Identifier]
+    analysisNodeIds: list[Identifier]
+
+
 class NodeResult(BaseModel):
     nodeId: Identifier
     label: str | None = None
@@ -180,22 +191,46 @@ class NodeResult(BaseModel):
     status: NodeStatus = "queued"
     output: dict[str, JsonValue] | None = None
     error: str | None = None
+    inputs: list[NodeTransfer] | None = None
+    outputs: list[NodeTransfer] | None = None
 
 
 class RunReport(BaseModel):
     runId: Identifier
     workflowId: Identifier
     createdAt: datetime | None = None
+    triggerMode: TriggerMode = "manual"
+    scheduledFor: datetime | None = None
     status: RunStatus = "queued"
     nodes: list[NodeResult]
     findings: list[Finding] = Field(default_factory=list)
     aiAnalysis: AiAnalysis | None = None
+
+    @classmethod
+    def for_workflow(cls, workflow: Workflow, scheduled_for: datetime | None = None) -> "RunReport":
+        return cls(
+            runId=uuid4().hex,
+            workflowId=workflow.id,
+            createdAt=datetime.now(timezone.utc),
+            scheduledFor=scheduled_for,
+            triggerMode="daily" if scheduled_for is not None else "manual",
+            status="queued",
+            nodes=[
+                NodeResult(
+                    nodeId=node.id, type=node.type, status="queued",
+                    label=node.config["title"] if node.type == "custom" else None,
+                )
+                for node in workflow.nodes
+            ],
+            findings=[],
+        )
 
 
 class RunListItem(BaseModel):
     runId: Identifier
     status: RunStatus
     createdAt: datetime | None = None
+    triggerMode: TriggerMode = "manual"
     findingCount: int = Field(ge=0)
 
 
