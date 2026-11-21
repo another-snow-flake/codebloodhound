@@ -22,7 +22,7 @@ from .runner import execute_plan, plan_run, validate_edges, validate_node_config
 from .schedule import daily_schedule
 from .scheduler import poll_schedules
 from .schemas import (
-    CUSTOM_NODE_CONFIG_KEYS, ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, Node,
+    CUSTOM_NODE_CONFIG_KEYS, PLUGIN_CONFIG_KEYS, ApiProblem, LlmCheckRequest, LlmCheckResult, LlmOptionOut, LlmSettings, ModelChoice, Node,
     NodeTemplate, NodeTemplateDraft, Position, RepositorySourceRequest,
     RunChatRequest, RunChatResponse, RunCreated,
     RunListItem, RunReport, RunRequest, SourceCreated, Workflow, WorkflowDraft,
@@ -232,10 +232,12 @@ def create_app(dsn: str | None = None) -> FastAPI:
         return plugin
 
     def save_plugin(plugin_id: str, draft: PluginDraft, account: Account, *, create: bool) -> UserPlugin:
-        if (draft.config.keys() - CUSTOM_NODE_CONFIG_KEYS
+        # a plugin is its own graph with input and output nodes; plugins saved earlier are single custom nodes
+        kind, allowed = ("plugin", PLUGIN_CONFIG_KEYS) if "graph" in draft.config else ("custom", CUSTOM_NODE_CONFIG_KEYS)
+        if (draft.config.keys() - allowed
                 or any(isinstance(value, str) and "\x00" in value for value in draft.config.values())):
-            raise ApiProblem(422, "invalid_node_config", "Unsupported custom node configuration.")
-        validate_node_config(Node(id="plugin", type="custom", position=Position(x=0, y=0), config=draft.config))
+            raise ApiProblem(422, "invalid_node_config", "Unsupported plugin configuration.")
+        validate_node_config(Node(id="plugin", type=kind, position=Position(x=0, y=0), config=draft.config))
         plugin = storage.save_plugin(plugin_id, account, draft, create=create)
         if plugin is None:
             raise ApiProblem(404, "plugin_not_found", "Plugin not found.")

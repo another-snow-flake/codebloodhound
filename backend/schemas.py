@@ -6,9 +6,14 @@ from pydantic import BaseModel, Field, JsonValue, StringConstraints
 
 
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=100)]
-NodeType = Literal["trigger", "source", "secrets", "sca", "sast", "condition", "ai", "notify", "custom"]
+NodeType = Literal[
+    "trigger", "source", "secrets", "sca", "sast", "condition", "ai", "notify", "custom",
+    # a plugin is its own small graph: "plugin_input" and "plugin_output" nodes live only inside it
+    "plugin", "plugin_input", "plugin_output",
+]
 LanguagePlugin = Literal["python", "javascript"]
 CUSTOM_NODE_CONFIG_KEYS = frozenset({"title", "color", "inputs", "outputs", "scanner", "language", "note"})
+PLUGIN_CONFIG_KEYS = frozenset({"title", "color", "inputs", "outputs", "note", "graph"})
 # condition edges leave through "true"/"false"; a custom node with several outputs or inputs
 # names the port: "out1".."out4", "in1".."in4"
 SourceHandle = Annotated[str, StringConstraints(pattern=r"^(?:true|false|out[1-4])$")]

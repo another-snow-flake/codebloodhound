@@ -5,6 +5,8 @@ from itertools import islice
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
+from pydantic import ValidationError
+
 from .ai import MAX_GROUPS, explain_findings, group_findings, select_priorities, template_analysis
 from .conditions import evaluate_condition, validate_condition
 from .language_plugins import LANGUAGE_SUFFIXES
@@ -15,14 +17,15 @@ from .llm import LlmError, ModelSpec, client_for, load_llm
 from .sca import CatalogUnavailable, find_vulnerable_dependencies
 from .sast import find_static_issues
 from .schedule import daily_schedule
-from .schemas import AiAnalysis, ApiProblem, Edge, Finding, Node, NodeTransfer, RunReport, WorkflowDraft
+from .schemas import AiAnalysis, ApiProblem, Edge, Finding, Node, NodeResult, NodeTransfer, RunReport, WorkflowDraft
 from .sources import archive_scope, find_secrets, validate_scope
 from .storage import Storage
 from .webhooks import WEBHOOK_REF, WebhookError, send_webhook
 
 
 SCANNERS = {"secrets": find_secrets, "sca": find_vulnerable_dependencies, "sast": find_static_issues}
-SUPPORTED_NODES = {"trigger", "source", "condition", "ai", "notify", "custom", *SCANNERS}
+# plugin_input and plugin_output appear only after a plugin node is unfolded for a run
+SUPPORTED_NODES = {"trigger", "source", "condition", "ai", "notify", "custom", "plugin_input", "plugin_output", *SCANNERS}
 MAX_PORTS = 4
 MAX_NOTE = 1000
 COLOR = re.compile(r"#[0-9a-fA-F]{6}")
@@ -39,6 +42,19 @@ def _port_count(node: Node, key: str) -> int:
     return node.config[key]  # validated by validate_node_config before use
 
 
+def _check_ports(node: Node, *, min_outputs: int, kind: str) -> None:
+    title, color = node.config.get("title"), node.config.get("color")
+    inputs, outputs = node.config.get("inputs"), node.config.get("outputs")
+    if (
+        not isinstance(title, str) or not 1 <= len(title.strip()) <= 40
+        or not isinstance(color, str) or not COLOR.fullmatch(color)
+        or type(inputs) is not int or not 1 <= inputs <= MAX_PORTS
+        or type(outputs) is not int or not min_outputs <= outputs <= MAX_PORTS
+    ):
+        raise ApiProblem(422, "invalid_node_config",
+                         f"A {kind} needs a title up to 40 characters, a #rrggbb color, 1-4 inputs and {min_outputs}-4 outputs.")
+
+
 def validate_node_config(node: Node) -> None:
     """Config shared by every node (the note) and the custom node's own settings."""
     note = node.config.get("note", "")
@@ -48,18 +64,15 @@ def validate_node_config(node: Node) -> None:
         validate_condition(node.config)
     if node.type == "source":
         validate_scope(node.config.get("path"))
+    if node.type in ("plugin_input", "plugin_output"):
+        index = node.config.get("index")
+        if type(index) is not int or not 1 <= index <= MAX_PORTS:
+            raise ApiProblem(422, "invalid_plugin", "Plugin inputs and outputs are numbered 1-4.")
+    if node.type == "plugin":
+        validate_plugin(node)
     if node.type != "custom":
         return
-    title, color = node.config.get("title"), node.config.get("color")
-    inputs, outputs = node.config.get("inputs"), node.config.get("outputs")
-    if (
-        not isinstance(title, str) or not 1 <= len(title.strip()) <= 40
-        or not isinstance(color, str) or not COLOR.fullmatch(color)
-        or type(inputs) is not int or not 1 <= inputs <= MAX_PORTS
-        or type(outputs) is not int or not 0 <= outputs <= MAX_PORTS
-    ):
-        raise ApiProblem(422, "invalid_node_config",
-                         "A custom node needs a title up to 40 characters, a #rrggbb color, 1-4 inputs and 0-4 outputs.")
+    _check_ports(node, min_outputs=0, kind="custom node")
     scanner = node_scanner(node)
     if scanner is not None and (not isinstance(scanner, str) or scanner not in SCANNERS):
         raise ApiProblem(422, "invalid_node_config", "Choose a built-in scanner for the custom node.")
@@ -73,17 +86,22 @@ def validate_node_config(node: Node) -> None:
 def output_handles(node: Node) -> set[str | None]:
     if node.type == "condition":
         return {"true", "false"}
-    if node.type == "custom":
+    if node.type in ("custom", "plugin"):
         count = _port_count(node, "outputs")
         return {None} if count == 1 else {f"out{number}" for number in range(1, count + 1)}
+    if node.type == "plugin_output":
+        return set()  # inside the plugin nothing leaves an output; on the canvas the plugin node's port does
     return {None}
 
 
 def input_handles(node: Node) -> set[str | None]:
     if node.type in SCANNERS:
         return {None, "source"}
-    if node.type == "source":
+    if node.type in ("source", "plugin_input"):
         return set()
+    if node.type == "plugin":
+        count = _port_count(node, "inputs")
+        return {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
     if node.type == "custom":
         count = _port_count(node, "inputs")
         handles = {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
@@ -93,9 +111,18 @@ def input_handles(node: Node) -> set[str | None]:
     return {None}
 
 
+class PluginGroup(NamedTuple):
+    """A plugin node unfolded into the run: its inner node IDs and the IDs of its input and output nodes."""
+    node: Node
+    inner: list[str]
+    inputs: dict[int, str]
+    outputs: dict[int, str]
+
+
 class ExecutionPlan(NamedTuple):
     nodes: list[Node]
     incoming: dict[str, list[Edge]]
+    plugins: dict[str, PluginGroup] = {}
 
 
 class NodeContext(NamedTuple):
@@ -146,8 +173,98 @@ def validate_edges(workflow: WorkflowDraft) -> dict[str, list[Edge]]:
     return incoming
 
 
+PLUGIN_INNER_TYPES = frozenset({"plugin_input", "plugin_output", "source", "condition", "ai", "custom", *SCANNERS})
+MAX_PLUGIN_NODES = 40
+MAX_PLUGIN_EDGES = 80
+
+
+def plugin_graph(node: Node) -> WorkflowDraft:
+    graph = node.config.get("graph")
+    if not isinstance(graph, dict):
+        raise ApiProblem(422, "invalid_plugin", "A plugin needs its own graph of nodes and edges.")
+    try:
+        return WorkflowDraft.model_validate({"name": "plugin", "nodes": graph.get("nodes"), "edges": graph.get("edges")})
+    except ValidationError:
+        raise ApiProblem(422, "invalid_plugin", "The plugin graph is malformed.") from None
+
+
+def validate_plugin(node: Node) -> None:
+    """A plugin is a separate small project: one input node per input port, one output node per output port,
+    and scanners, sources, conditions, AI or custom nodes between them."""
+    _check_ports(node, min_outputs=1, kind="plugin")
+    graph = plugin_graph(node)
+    if len(graph.nodes) > MAX_PLUGIN_NODES or len(graph.edges) > MAX_PLUGIN_EDGES:
+        raise ApiProblem(422, "invalid_plugin", f"A plugin holds up to {MAX_PLUGIN_NODES} nodes and {MAX_PLUGIN_EDGES} edges.")
+    for inner in graph.nodes:
+        if inner.type not in PLUGIN_INNER_TYPES:
+            raise ApiProblem(422, "invalid_plugin",
+                             "A plugin can hold scanners, sources, conditions, AI recommendations and custom nodes.")
+        if "/" in inner.id:
+            raise ApiProblem(422, "invalid_plugin", "Node IDs inside a plugin cannot contain a slash.")
+    for kind, count in (("plugin_input", node.config["inputs"]), ("plugin_output", node.config["outputs"])):
+        indexes = sorted(inner.config.get("index") for inner in graph.nodes if inner.type == kind)
+        if indexes != list(range(1, count + 1)):
+            raise ApiProblem(422, "invalid_plugin", "The plugin needs exactly one input node per input and one output node per output.")
+    incoming = validate_edges(graph)
+    try:
+        tuple(TopologicalSorter({key: {edge.source for edge in edges} for key, edges in incoming.items()}).static_order())
+    except CycleError:
+        raise ApiProblem(422, "invalid_plugin", "A plugin cannot contain cycles.") from None
+    for inner in graph.nodes:
+        if inner.type not in ("plugin_input", "source") and not any(edge.targetHandle != "source" for edge in incoming[inner.id]):
+            raise ApiProblem(422, "invalid_plugin", "Connect every node inside the plugin; each output needs an incoming edge.")
+
+
+def expand_plugins(workflow: WorkflowDraft) -> tuple[WorkflowDraft, dict[str, PluginGroup]]:
+    """Unfold every plugin node into its inner graph so the run uses the same scanners, branches and skips.
+
+    Inner nodes get IDs "<plugin node>/<inner node>". An edge into port inK of the plugin goes to its input
+    node K, an edge out of port outK leaves its output node K; both pass findings through unchanged.
+    """
+    plugins = {node.id: node for node in workflow.nodes if node.type == "plugin"}
+    if not plugins:
+        return workflow, {}
+    nodes: list[Node] = []
+    edges: list[Edge] = []
+    groups: dict[str, PluginGroup] = {}
+    for node in workflow.nodes:
+        if node.type != "plugin":
+            nodes.append(node)
+            continue
+        graph = plugin_graph(node)
+        prefix = node.id + "/"
+        inner = [prefix + item.id for item in graph.nodes]
+        nodes.extend(item.model_copy(update={"id": prefix + item.id}) for item in graph.nodes)
+        edges.extend(
+            edge.model_copy(update={"id": prefix + edge.id, "source": prefix + edge.source, "target": prefix + edge.target})
+            for edge in graph.edges
+        )
+        groups[node.id] = PluginGroup(
+            node, inner,
+            {item.config["index"]: prefix + item.id for item in graph.nodes if item.type == "plugin_input"},
+            {item.config["index"]: prefix + item.id for item in graph.nodes if item.type == "plugin_output"},
+        )
+    for edge in workflow.edges:
+        update = {}
+        if edge.target in groups:
+            update.update(target=groups[edge.target].inputs[int(edge.targetHandle[2:]) if edge.targetHandle else 1], targetHandle=None)
+        if edge.source in groups:
+            update.update(source=groups[edge.source].outputs[int(edge.sourceHandle[3:]) if edge.sourceHandle else 1], sourceHandle=None)
+        edges.append(edge.model_copy(update=update))
+    if len({node.id for node in nodes}) != len(nodes) or len({edge.id for edge in edges}) != len(edges):
+        raise ApiProblem(422, "invalid_workflow", "Node IDs clash with the nodes inside a plugin.")
+    targets = {edge.target for edge in edges}
+    for group in groups.values():
+        if any(input_id not in targets for input_id in group.inputs.values()):
+            raise ApiProblem(422, "plugin_input_unconnected",
+                             f"Connect every input of the plugin node «{group.node.config['title']}».")
+    return WorkflowDraft.model_construct(name=workflow.name, nodes=nodes, edges=edges), groups
+
+
 def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
     incoming = validate_edges(workflow)
+    if any(node.type in ("plugin_input", "plugin_output") for node in workflow.nodes):
+        raise ApiProblem(422, "unsupported_node", "Plugin input and output nodes belong inside a plugin.")
     triggers = [node for node in workflow.nodes if node.type == "trigger"]
     if len(triggers) != 1 or incoming[triggers[0].id]:
         raise ApiProblem(422, "invalid_workflow", "A run requires one trigger with no incoming edges.")
@@ -157,6 +274,11 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
     if mode == "daily":
         daily_schedule(workflow)
 
+    workflow, plugins = expand_plugins(workflow)
+    if plugins:
+        incoming = {node.id: [] for node in workflow.nodes}
+        for edge in workflow.edges:
+            incoming[edge.target].append(edge)
     nodes_by_id = {node.id: node for node in workflow.nodes}
     dependencies = {node_id: {edge.source for edge in edges} for node_id, edges in incoming.items()}
     try:
@@ -176,7 +298,7 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
             ref = node.config.get("webhookRef")
             if not isinstance(ref, str) or not WEBHOOK_REF.fullmatch(ref):
                 raise ApiProblem(422, "invalid_webhook_ref", "Notification requires a valid config.webhookRef.")
-    return ExecutionPlan(ordered, incoming)
+    return ExecutionPlan(ordered, incoming, plugins)
 
 
 def merge_analysis(report: RunReport, analysis: AiAnalysis) -> None:
@@ -257,6 +379,7 @@ def execute_plan(
     storage: Storage, report: RunReport, plan: ExecutionPlan, source_id: str, archive: bytes,
     model: ModelSpec | None = None,
 ):
+    add_plugin_results(report, plan)
     results = {result.nodeId: result for result in report.nodes}
     outgoing = {node.id: [] for node in plan.nodes}
     for edges in plan.incoming.values():
@@ -322,8 +445,8 @@ def execute_plan(
                 result.output, result.error = outcome.output, outcome.error
                 if outcome.analysis is not None:
                     context.analyses[node.id] = outcome.analysis
-            elif node.type == "custom":
-                # a user-defined step: passes the findings it received to every output
+            elif node.type in ("custom", "plugin_input", "plugin_output"):
+                # a user-defined step or a plugin port: passes the findings it received to every output
                 result.output = {"passed": len(context.findings)}
             elif node.type == "notify":
                 status_code = send_webhook(node.config["webhookRef"], {
@@ -361,7 +484,56 @@ def execute_plan(
         except Exception:
             result.status = "failed"
             result.error = "Node execution failed."
+        if "/" in node.id and node.id.split("/", 1)[0] in plan.plugins:
+            summarize_plugin(results, plan.plugins[node.id.split("/", 1)[0]])
         storage.save_run(report)
 
+    for group in plan.plugins.values():
+        summarize_plugin(results, group, finished=True)
     report.status = "failed" if any(node.status == "failed" for node in report.nodes) else "succeeded"
     storage.save_run(report)
+
+
+def add_plugin_results(report: RunReport, plan: ExecutionPlan) -> None:
+    """Report rows for the nodes inside each plugin, right after the plugin node's own row."""
+    if not plan.plugins:
+        return
+    known = {result.nodeId for result in report.nodes}
+    by_id = {node.id: node for node in plan.nodes}
+    rows = []
+    for result in report.nodes:
+        rows.append(result)
+        group = plan.plugins.get(result.nodeId)
+        if group is None:
+            continue
+        for inner_id in group.inner:
+            if inner_id in known:
+                continue
+            inner = by_id[inner_id]
+            label = inner.config.get("title") if inner.type == "custom" else None
+            rows.append(NodeResult(nodeId=inner_id, type=inner.type, status="queued", label=label))
+    report.nodes = rows
+
+
+def summarize_plugin(results: dict[str, NodeResult], group: PluginGroup, finished: bool = False) -> None:
+    """The plugin node's row on the canvas: status from its inner nodes, transfers from its input and output nodes."""
+    result, inner = results[group.node.id], [results[node_id] for node_id in group.inner]
+    statuses = {item.status for item in inner}
+    if "failed" in statuses:
+        result.status = "failed"
+        result.error = next(item.error for item in inner if item.status == "failed")
+    elif not finished:
+        result.status = "running" if statuses & {"running", "succeeded", "skipped"} else "queued"
+    else:
+        result.status = "succeeded" if "succeeded" in statuses else "skipped"
+    many_inputs, many_outputs = len(group.inputs) > 1, len(group.outputs) > 1
+    result.inputs = [
+        transfer.model_copy(update={"port": f"in{index}" if many_inputs else None})
+        for index, node_id in sorted(group.inputs.items()) for transfer in results[node_id].inputs or []
+    ]
+    result.outputs = [
+        transfer.model_copy(update={"port": f"out{index}" if many_outputs else None})
+        for index, node_id in sorted(group.outputs.items()) for transfer in results[node_id].outputs or []
+    ]
+    findings = sum(len((item.output or {}).get("findings") or []) for item in inner if item.type in SCANNERS)
+    result.output = {"innerNodes": len(inner), "findings": findings}
