@@ -19,7 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.sast import find_kotlin_issues  # noqa: E402
+from backend.language_plugins import LANGUAGE_SUFFIXES  # noqa: E402
+from backend.sast import find_static_issues  # noqa: E402
 from backend.sca import CatalogUnavailable, find_vulnerable_dependencies  # noqa: E402
 from backend.sources import find_secrets, validate_zip  # noqa: E402
 
@@ -228,6 +229,149 @@ SAMPLES["injected-paths"] = ("Проверка защиты AI: папка на�
     for path, text in SAMPLES["notes-demo"][1].items()
 })
 
+PYTHON_APP = '''import json
+import os
+import pickle
+import subprocess
+
+from flask import Flask, request
+
+app = Flask(__name__)
+
+DB_PASSWORD = "synthetic-python-db-password"
+stripe_api_key: str = "synthetic-python-stripe-key"
+API_TOKEN = os.environ["API_TOKEN"]  # safe: read from the environment
+
+
+@app.get("/calc")
+def calc():
+    return str(eval(request.args["expr"]))
+
+
+@app.post("/ping")
+def ping():
+    host = request.form["host"]
+    subprocess.run(f"ping -c 1 {host}", shell=True)
+    subprocess.run(["ping", "-c", "1", host])  # safe: no shell
+    return "ok"
+
+
+@app.post("/import")
+def import_notes():
+    notes = pickle.loads(request.data)
+    settings = json.loads(request.form.get("settings", "{}"))  # safe: data-only format
+    return {"notes": len(notes), "settings": settings}
+'''
+
+PYTHON_WORKER = '''import os
+
+
+def run_job(code_from_queue: str) -> None:
+    exec(code_from_queue)
+
+
+def connect():
+    password = os.getenv("DB_PASSWORD")  # safe
+    return password
+'''
+
+JS_SERVER = '''const express = require("express");
+
+const app = express();
+const apiKey = "synthetic-js-api-key";
+const dbPassword = process.env.DB_PASSWORD; // safe: from the environment
+
+app.get("/calc", (req, res) => {
+  res.send(String(eval(req.query.expr)));
+});
+
+app.post("/rules", (req, res) => {
+  const rule = new Function("input", req.body.code);
+  res.json({ ok: rule(req.body.input) });
+});
+
+app.get("/settings", (req, res) => {
+  res.json(JSON.parse(req.query.json || "{}")); // safe
+});
+
+app.listen(3000);
+'''
+
+JS_PAGE = '''function showComment(comment) {
+  const box = document.querySelector("#comment");
+  box.innerHTML = comment.html;
+}
+
+function showName(user) {
+  document.querySelector("#name").textContent = user.name; // safe
+}
+'''
+
+TS_API = '''export const authToken = "synthetic-ts-auth-token";
+export const sentryDsn = process.env.SENTRY_DSN ?? ""; // safe
+
+export async function loadProfile(id: string): Promise<Response> {
+  return fetch(`/api/profile/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  });
+}
+'''
+
+TS_COMMENT = '''type Props = { html: string; text: string };
+
+export function renderComment(target: HTMLElement, props: Props): void {
+  target.innerHTML = props.html;
+}
+
+export function renderText(target: HTMLElement, props: Props): void {
+  target.textContent = props.text; // safe
+}
+'''
+
+TS_CALC = '''export function calculate(expression: string): number {
+  const compute = new Function(`return (${expression});`);
+  return compute();
+}
+
+export function parseSettings(raw: string): Record<string, unknown> {
+  return JSON.parse(raw); // safe
+}
+'''
+
+SAMPLES["python-demo"] = ("Python (Flask): eval, subprocess с shell=True, pickle.loads и exec, секреты в коде, .env и settings.yaml. "
+                         "Рядом безопасные варианты: os.environ, subprocess со списком, json.loads. SCA для requirements.txt пока не поддерживается.", {
+    "app.py": PYTHON_APP,
+    "worker/jobs.py": PYTHON_WORKER,
+    "config/settings.yaml": "database:\n  host: db.local\n  password: synthetic-yaml-db-password\n",
+    ".env": "SECRET_TOKEN=synthetic-python-env-token\n",
+    "requirements.txt": "flask==2.0.1\nPyYAML==5.3\n",
+})
+
+SAMPLES["javascript-demo"] = ("JavaScript (Node/Express): eval, new Function, innerHTML, ключ API в коде и пароль в config.json. "
+                             "Рядом безопасные варианты: process.env, JSON.parse, textContent.", {
+    "server.js": JS_SERVER,
+    "public/app.js": JS_PAGE,
+    "config/config.json": '{\n  "db": {\n    "user": "app",\n    "password": "synthetic-json-db-password"\n  }\n}\n',
+    "package.json": '{\n  "name": "js-demo",\n  "dependencies": {"express": "4.17.1", "lodash": "4.17.15"}\n}\n',
+})
+
+SAMPLES["typescript-demo"] = ("TypeScript (фронтенд): токен в коде, innerHTML в .ts и new Function в .ts. "
+                             "Рядом безопасные варианты: process.env, textContent, JSON.parse.", {
+    "src/api.ts": TS_API,
+    "src/renderComment.ts": TS_COMMENT,
+    "src/calc.ts": TS_CALC,
+    "tsconfig.json": '{\n  "compilerOptions": {"strict": true, "target": "ES2022"}\n}\n',
+})
+
+SAMPLES["mixed-languages"] = ("Kotlin, Python и JavaScript в разных папках: удобно проверять ноду «Источник» "
+                             "(например путь web или scripts) и то, что сканеры видят все языки сразу.", {
+    "backend/src/main/kotlin/demo/NotesRepository.kt": NOTES_REPOSITORY,
+    "backend/src/main/resources/application.properties": "spring.datasource.password=synthetic-mixed-password\n",
+    "scripts/import.py": PYTHON_WORKER,
+    "web/app.js": JS_PAGE,
+    "web/config.js": 'export const apiKey = "synthetic-mixed-js-key";\n',
+})
+
 big_deps = [("org.example.synthetic", f"lib-{name}", "1.0.0") for name in (
     "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet",
     "kilo", "lima", "mike", "november", "oscar", "papa", "quebec", "romeo")]
@@ -263,7 +407,8 @@ def scan(data: bytes) -> dict[str, list]:
         sca = find_vulnerable_dependencies(data)
     except CatalogUnavailable:
         sca = None
-    return {"secrets": find_secrets(data), "sast": find_kotlin_issues(data), "sca": sca}
+    languages = tuple(LANGUAGE_SUFFIXES)  # the backend scans every supported language
+    return {"secrets": find_secrets(data, None, languages), "sast": find_static_issues(data, None, languages), "sca": sca}
 
 
 def main():
@@ -283,7 +428,7 @@ def main():
     readme = [
         "# Учебные архивы / Sample projects",
         "",
-        "Синтетические проекты Kotlin/Spring Boot для проверки редактора. Все пароли, токены и ключи выдуманы. "
+        "Синтетические проекты на Kotlin/Spring Boot, Python, JavaScript и TypeScript для проверки редактора. Все пароли, токены и ключи выдуманы. "
         "Архивы и эта таблица собираются командой `.\\.venv\\Scripts\\python.exe tools\\make_samples.py`, "
         "числа в таблице посчитаны теми же анализаторами, что и в бэкенде.",
         "",
@@ -295,7 +440,7 @@ def main():
         "|---|---|---|---|---|---|",
         *rows,
         "",
-        "Synthetic Kotlin/Spring Boot projects for testing the editor; every secret is made up. "
+        "Synthetic Kotlin/Spring Boot, Python, JavaScript and TypeScript projects for testing the editor; every secret is made up. "
         "Rebuild the archives and this table with `tools/make_samples.py`; the counts come from the backend scanners.",
         "",
     ]
