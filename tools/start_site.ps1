@@ -13,6 +13,7 @@
 #   site-password.txt  password for user "team" (owner-only), db-password.txt  database password
 #   site-url.txt       the current public URL, logs\  postgres, api, site and tunnel logs
 #   relay.txt          "<user@vps> <domain>" when a VPS relay is configured
+#   deepseek-key.txt   optional DeepSeek API key (made owner-only on start), deepseek-models.txt  optional model names
 #   *.pid              processes this script started; restarts stop only these
 # Passwords are never printed. The free tunnel gets a new URL on every start; the relay keeps the domain.
 # The relay tunnel uses its own key, ~\.ssh\codebloodhound_relay, accepted only by the restricted VPS user.
@@ -129,9 +130,22 @@ $env:LLM_PROVIDER = 'local'
 $env:LOCAL_LLM_MODEL = $Model
 $env:LLM_TIMEOUT_SECONDS = '180'
 $env:PYTHONIOENCODING = 'utf-8'
+# DeepSeek stays optional: with a key in deepseek-key.txt it appears in the editor's model list,
+# and each run still needs the user's consent to send findings outside this PC
+$deepseekFile = Join-Path $dir 'deepseek-key.txt'
+$deepseekModels = Join-Path $dir 'deepseek-models.txt'
+if ((Test-Path $deepseekFile) -and (Get-Content $deepseekFile -Raw).Trim()) {
+    icacls $deepseekFile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(R,W)" | Out-Null
+    $env:DEEPSEEK_API_KEY = (Get-Content $deepseekFile -Raw).Trim()
+    if (Test-Path $deepseekModels) {
+        $names = ((Get-Content $deepseekModels -Raw) -split '[,\s]+' | Where-Object { $_ }) -join ','
+        if ($names) { $env:DEEPSEEK_MODELS = $names; $env:DEEPSEEK_MODEL = ($names -split ',')[0] }
+    }
+}
 $python = Join-Path $repo '.venv\Scripts\python.exe'
 Start-Logged 'api' $python @('-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', '8000') | Out-Null
 Remove-Item Env:DATABASE_URL
+Remove-Item Env:DEEPSEEK_API_KEY -ErrorAction SilentlyContinue
 if (-not (Wait-Port 8000 30)) { throw "The API did not start. See $logs\api.err.log" }
 
 $passwordFile = Join-Path $dir 'site-password.txt'
