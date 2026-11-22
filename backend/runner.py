@@ -101,7 +101,10 @@ def input_handles(node: Node) -> set[str | None]:
         return set()
     if node.type == "plugin":
         count = _port_count(node, "inputs")
-        return {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
+        handles = {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
+        if plugin_scope_inputs(plugin_graph(node)):
+            handles.add("source")
+        return handles
     if node.type == "custom":
         count = _port_count(node, "inputs")
         handles = {None} if count == 1 else {f"in{number}" for number in range(1, count + 1)}
@@ -117,6 +120,7 @@ class PluginGroup(NamedTuple):
     inner: list[str]
     inputs: dict[int, str]
     outputs: dict[int, str]
+    scope_inputs: tuple[str, ...]
 
 
 class ExecutionPlan(NamedTuple):
@@ -159,8 +163,9 @@ def validate_edges(workflow: WorkflowDraft) -> dict[str, list[Edge]]:
         if edge.source not in nodes or edge.target not in nodes:
             raise ApiProblem(422, "invalid_workflow", "Every edge must connect existing nodes.")
         source = nodes[edge.source]
-        if (source.type == "source") != (edge.targetHandle == "source"):
-            raise ApiProblem(422, "invalid_scan_source_edge", "Connect a source node only to a scanner's source input.")
+        scope_edge = edge.targetHandle == "source"
+        if (source.type == "source" and not scope_edge) or (scope_edge and source.type not in ("source", "plugin_input")):
+            raise ApiProblem(422, "invalid_scan_source_edge", "Connect a project source or plugin input to a source port.")
         if source.type == "condition" and edge.sourceHandle not in ("true", "false"):
             raise ApiProblem(422, "invalid_workflow", "Only condition edges require a true or false sourceHandle.")
         if edge.sourceHandle not in output_handles(source):
@@ -173,7 +178,7 @@ def validate_edges(workflow: WorkflowDraft) -> dict[str, list[Edge]]:
     return incoming
 
 
-PLUGIN_INNER_TYPES = frozenset({"plugin_input", "plugin_output", "source", "condition", "ai", "custom", *SCANNERS})
+PLUGIN_INNER_TYPES = frozenset({"plugin_input", "plugin_output", "source", "condition", "ai", "custom", "notify", *SCANNERS})
 MAX_PLUGIN_NODES = 40
 MAX_PLUGIN_EDGES = 80
 
@@ -188,6 +193,15 @@ def plugin_graph(node: Node) -> WorkflowDraft:
         raise ApiProblem(422, "invalid_plugin", "The plugin graph is malformed.") from None
 
 
+def plugin_scope_inputs(graph: WorkflowDraft) -> set[str]:
+    scope_outputs = {edge.source for edge in graph.edges if edge.targetHandle == "source"}
+    return {node.id for node in graph.nodes if node.type == "plugin_input" and node.id in scope_outputs}
+
+
+def has_flow_input(edges: list[Edge], plugin_inputs: set[str]) -> bool:
+    return any(edge.targetHandle != "source" or edge.source in plugin_inputs for edge in edges)
+
+
 def validate_plugin(node: Node) -> None:
     """A plugin is a separate small project: one input node per input port, one output node per output port,
     and scanners, sources, conditions, AI or custom nodes between them."""
@@ -198,20 +212,21 @@ def validate_plugin(node: Node) -> None:
     for inner in graph.nodes:
         if inner.type not in PLUGIN_INNER_TYPES:
             raise ApiProblem(422, "invalid_plugin",
-                             "A plugin can hold scanners, sources, conditions, AI recommendations and custom nodes.")
+                             "A plugin can hold scanners, sources, conditions, AI recommendations, notifications and custom nodes.")
         if "/" in inner.id:
             raise ApiProblem(422, "invalid_plugin", "Node IDs inside a plugin cannot contain a slash.")
+    incoming = validate_edges(graph)
     for kind, count in (("plugin_input", node.config["inputs"]), ("plugin_output", node.config["outputs"])):
         indexes = sorted(inner.config.get("index") for inner in graph.nodes if inner.type == kind)
         if indexes != list(range(1, count + 1)):
             raise ApiProblem(422, "invalid_plugin", "The plugin needs exactly one input node per input and one output node per output.")
-    incoming = validate_edges(graph)
     try:
         tuple(TopologicalSorter({key: {edge.source for edge in edges} for key, edges in incoming.items()}).static_order())
     except CycleError:
         raise ApiProblem(422, "invalid_plugin", "A plugin cannot contain cycles.") from None
+    inputs = plugin_scope_inputs(graph)
     for inner in graph.nodes:
-        if inner.type not in ("plugin_input", "source") and not any(edge.targetHandle != "source" for edge in incoming[inner.id]):
+        if inner.type not in ("plugin_input", "source") and not has_flow_input(incoming[inner.id], inputs):
             raise ApiProblem(422, "invalid_plugin", "Connect every node inside the plugin; each output needs an incoming edge.")
 
 
@@ -243,17 +258,23 @@ def expand_plugins(workflow: WorkflowDraft) -> tuple[WorkflowDraft, dict[str, Pl
             node, inner,
             {item.config["index"]: prefix + item.id for item in graph.nodes if item.type == "plugin_input"},
             {item.config["index"]: prefix + item.id for item in graph.nodes if item.type == "plugin_output"},
+            tuple(prefix + source for source in sorted(plugin_scope_inputs(graph))),
         )
     for edge in workflow.edges:
         update = {}
         if edge.target in groups:
-            update.update(target=groups[edge.target].inputs[int(edge.targetHandle[2:]) if edge.targetHandle else 1], targetHandle=None)
+            group = groups[edge.target]
+            if edge.targetHandle == "source":
+                edges.extend(edge.model_copy(update={"id": f"{edge.id}/scope/{index}", "target": target})
+                             for index, target in enumerate(group.scope_inputs))
+                continue
+            update.update(target=group.inputs[int(edge.targetHandle[2:]) if edge.targetHandle else 1], targetHandle=None)
         if edge.source in groups:
             update.update(source=groups[edge.source].outputs[int(edge.sourceHandle[3:]) if edge.sourceHandle else 1], sourceHandle=None)
         edges.append(edge.model_copy(update=update))
     if len({node.id for node in nodes}) != len(nodes) or len({edge.id for edge in edges}) != len(edges):
         raise ApiProblem(422, "invalid_workflow", "Node IDs clash with the nodes inside a plugin.")
-    targets = {edge.target for edge in edges}
+    targets = {edge.target for edge in edges if edge.targetHandle != "source"}
     for group in groups.values():
         if any(input_id not in targets for input_id in group.inputs.values()):
             raise ApiProblem(422, "plugin_input_unconnected",
@@ -286,8 +307,9 @@ def plan_run(workflow: WorkflowDraft) -> ExecutionPlan:
     except CycleError as error:
         raise ApiProblem(422, "invalid_workflow", "A workflow cannot contain cycles.") from error
 
+    plugin_inputs = {node.id for node in ordered if node.type == "plugin_input"}
     if any(
-        not any(edge.targetHandle != "source" for edge in incoming[node.id])
+        not has_flow_input(incoming[node.id], plugin_inputs)
         for node in ordered if node.type not in ("trigger", "source")
     ):
         raise ApiProblem(422, "invalid_workflow", "Every node must be reachable from the trigger.")
@@ -382,6 +404,8 @@ def execute_plan(
     add_plugin_results(report, plan)
     results = {result.nodeId: result for result in report.nodes}
     outgoing = {node.id: [] for node in plan.nodes}
+    plugin_inputs = {node.id for node in plan.nodes if node.type == "plugin_input"}
+    scoped_plugin_inputs = {node_id for group in plan.plugins.values() for node_id in group.scope_inputs}
     for edges in plan.incoming.values():
         for edge in edges:
             outgoing[edge.source].append(edge)
@@ -401,6 +425,8 @@ def execute_plan(
         flow_inputs = [context for edge, context in active_inputs if edge.targetHandle != "source"]
         scope_input = next((context for edge, context in active_inputs if edge.targetHandle == "source"), None)
         requires_source = any(edge.targetHandle == "source" for edge in plan.incoming[node.id])
+        if not flow_inputs:
+            flow_inputs = [context for edge, context in active_inputs if edge.source in plugin_inputs]
         if node.type not in ("trigger", "source") and (not flow_inputs or (requires_source and scope_input is None)):
             result.status = "skipped"
             storage.save_run(report)
@@ -454,7 +480,12 @@ def execute_plan(
                 result.output, result.error = outcome.output, outcome.error
                 if outcome.analysis is not None:
                     context.analyses[node.id] = outcome.analysis
-            elif node.type in ("custom", "plugin_input", "plugin_output"):
+            elif node.type == "plugin_input":
+                if node.id in scoped_plugin_inputs:
+                    path = scope_input.source_path if scope_input is not None else PurePosixPath()
+                    context = NodeContext(context.findings, context.analyses, path)
+                result.output = {"passed": len(context.findings)}
+            elif node.type in ("custom", "plugin_output"):
                 # a user-defined step or a plugin port: passes the findings it received to every output
                 result.output = {"passed": len(context.findings)}
             elif node.type == "notify":
@@ -520,7 +551,8 @@ def add_plugin_results(report: RunReport, plan: ExecutionPlan) -> None:
                 continue
             inner = by_id[inner_id]
             label = inner.config.get("title") if inner.type == "custom" else None
-            rows.append(NodeResult(nodeId=inner_id, type=inner.type, status="queued", label=label))
+            port_index = inner.config.get("index") if inner.type in ("plugin_input", "plugin_output") else None
+            rows.append(NodeResult(nodeId=inner_id, type=inner.type, status="queued", label=label, portIndex=port_index))
     report.nodes = rows
 
 
@@ -537,12 +569,12 @@ def summarize_plugin(results: dict[str, NodeResult], group: PluginGroup, finishe
         result.status = "succeeded" if "succeeded" in statuses else "skipped"
     many_inputs, many_outputs = len(group.inputs) > 1, len(group.outputs) > 1
     result.inputs = [
-        transfer.model_copy(update={"port": f"in{index}" if many_inputs else None})
+        transfer.model_copy(update={"port": transfer.port if transfer.port == "source" else f"in{index}" if many_inputs else None})
         for index, node_id in sorted(group.inputs.items()) for transfer in results[node_id].inputs or []
     ]
     result.outputs = [
         transfer.model_copy(update={"port": f"out{index}" if many_outputs else None})
         for index, node_id in sorted(group.outputs.items()) for transfer in results[node_id].outputs or []
     ]
-    findings = sum(len((item.output or {}).get("findings") or []) for item in inner if item.type in SCANNERS)
-    result.output = {"innerNodes": len(inner), "findings": findings}
+    finding_ids = {finding["id"] for item in inner for finding in (item.output or {}).get("findings", [])}
+    result.output = {"innerNodes": len(inner), "findings": len(finding_ids)}

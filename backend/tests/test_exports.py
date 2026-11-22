@@ -65,6 +65,20 @@ class ExportFindingsTest(unittest.TestCase):
             },
         ])
 
+    def test_export_path_stays_stable_when_other_modules_were_not_scanned(self):
+        project_bytes = io.BytesIO()
+        with ZipFile(project_bytes, "w") as project:
+            project.writestr("backend/src/main/resources/application.properties", "app.password=training-value")
+            project.writestr("web/config.js", 'export const apiKey = "training-api-key";')
+        self.storage.get_source.return_value = project_bytes.getvalue()
+        self.report.findings = find_secrets(project_bytes.getvalue(), plugins=("javascript",))
+        full = self.client.get("/runs/r/findings.json").json()["findings"]
+        self.assertEqual(len(full), 2)
+        self.report.findings = [finding for finding in self.report.findings if finding.file.startswith("backend/")]
+        scoped = self.client.get("/runs/r/findings.json").json()["findings"]
+        self.assertEqual(scoped, [finding for finding in full if finding["path"].startswith("backend/")])
+        self.assertEqual(scoped[0]["path"], "backend/src/main/resources/application.properties")
+
     def test_empty_report_downloads_and_running_report_cannot_be_exported(self):
         response = self.client.get("/runs/r/findings.json")
         self.assertEqual(response.json(), {"findings": []})

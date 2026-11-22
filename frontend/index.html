@@ -57,15 +57,16 @@
   <span class="tag" id="srcTag">источник не выбран</span>
 </div>
 <main id="main" class="ai-open">
-  <aside id="left">
-    <div class="tabs"><button class="on" data-t="cat">Каталог нод</button><button data-t="my">Мои сценарии</button></div>
-    <div class="list" id="leftList"></div>
-    <button class="libtab" id="libTab" aria-label="Каталог нод" title="Каталог нод"></button>
-  </aside>
   <section class="center">
-    <div class="canvas" id="canvas"><div class="board" id="board">
-      <svg class="edges" id="edges"><g id="edgeLayer"></g></svg>
-    </div>
+    <div class="canvas" id="canvas">
+      <aside id="left">
+        <div class="tabs" inert><button class="on" data-t="cat">Каталог нод</button><button data-t="my">Мои сценарии</button></div>
+        <div class="list" id="leftList" inert></div>
+        <button class="libtab" id="libTab" aria-controls="left" aria-expanded="false" aria-label="Каталог нод" title="Каталог нод"></button>
+      </aside>
+      <div class="board" id="board">
+        <svg class="edges" id="edges"><g id="edgeLayer"></g></svg>
+      </div>
       <button class="btn canvas-home" id="canvasHome" title="Перетащите фон, чтобы перемещаться по холсту">К началу графа</button>
       <div class="plugin-bar" id="pluginBar" hidden role="region" aria-label="Редактор плагина">
         <span><b>Редактор плагина:</b> <span id="pluginBarTitle"></span> <small id="pluginBarPorts"></small></span>
@@ -73,7 +74,7 @@
         <button class="btn" type="button" id="pluginCancel">Отмена</button>
         <button class="btn pri" type="button" id="pluginSave">Сохранить плагин</button>
       </div>
-      <button class="fab" id="chatFab" aria-label="Виртуальный помощник" title="Виртуальный помощник">💬</button>
+      <button class="fab" id="chatFab" aria-controls="right" aria-expanded="true" aria-label="Виртуальный помощник" title="Виртуальный помощник">💬</button>
       <aside id="right">
         <div class="ph"><h3>Виртуальный помощник</h3><span class="tag" id="llmTag"></span><button class="btn ico" id="aiToggle" aria-label="Закрыть помощника">×</button></div>
         <div class="ab">
@@ -152,15 +153,15 @@
   <div class="row"><button class="btn" data-close>Закрыть</button><button class="btn pri" id="setSave">Сохранить и проверить</button></div>
 </div></div>
 
-<div class="ov" id="ovJson"><div class="modal" style="width:min(640px,100%)">
-  <h2>Схема сценария (JSON)</h2><p class="note">Формат совпадает с контрактом <code>Workflow</code>.</p>
-  <textarea id="jsonOut" readonly></textarea>
-  <div class="row"><button class="btn" id="jsonCopy">Копировать</button><button class="btn pri" id="jsonDownload">Скачать</button><button class="btn" data-close>Закрыть</button></div>
-</div></div>
-<div class="ov" id="ovGenerate"><form class="modal" id="generateForm" role="dialog" aria-modal="true" aria-labelledby="generateTitle">
+<dialog class="modal" id="ovJson" aria-labelledby="jsonTitle">
+  <h2 id="jsonTitle">Схема сценария (JSON)</h2><p class="note">Формат совпадает с контрактом <code>Workflow</code>.</p>
+  <textarea id="jsonOut" aria-label="JSON сценария" readonly autofocus></textarea>
+  <form class="row" method="dialog"><button type="button" class="btn" id="jsonCopy">Копировать</button><button type="button" class="btn pri" id="jsonDownload">Скачать</button><button class="btn">Закрыть</button></form>
+</dialog>
+<dialog class="modal" id="ovGenerate" aria-labelledby="generateTitle"><form id="generateForm">
   <h2 id="generateTitle">Сценарий по описанию</h2>
   <label class="f" for="generatePrompt">Что нужно проверять?</label>
-  <textarea class="note-in generate-prompt" id="generatePrompt" required maxlength="2000" placeholder="Каждый день в 14:00 ищи секреты и отправляй уведомление, если есть находки высокой критичности."></textarea>
+  <textarea class="note-in generate-prompt" id="generatePrompt" required autofocus maxlength="2000" placeholder="Каждый день в 14:00 ищи секреты и отправляй уведомление, если есть находки высокой критичности."></textarea>
   <p class="note">Модели передаётся описание. Используйте учебные данные без токенов и паролей.</p>
   <label class="chk note" id="generateConsentRow" hidden><input type="checkbox" id="generateConsent"> Разрешаю отправить описание в DeepSeek.</label>
   <p class="note" id="generateStatus" aria-live="polite"></p>
@@ -169,17 +170,17 @@
     <p class="note" id="generateNodes"></p>
     <p class="note" id="generateScope" hidden>Область проверки: <code></code></p>
     <ul class="note" id="generateWarnings"></ul>
-    <p class="note">Черновик заменит текущий граф на холсте. Чтобы сохранить текущие правки, сначала закройте окно и сохраните сценарий.</p>
+    <p class="note">При открытии черновика редактор предложит сохранить несохранённые изменения.</p>
   </div>
   <div class="row generate-actions">
     <button type="button" class="btn" data-close>Закрыть</button>
     <button type="submit" class="btn pri" id="generateRun">Сгенерировать</button>
     <button type="button" class="btn" id="generateApply" hidden>Открыть черновик</button>
   </div>
-</form></div>
-<div class="ov" id="ovNode"><form class="modal" id="customNodeForm" role="dialog" aria-modal="true" aria-labelledby="cnHeading">
+</form></dialog>
+<dialog class="modal" id="ovNode" aria-labelledby="cnHeading"><form id="customNodeForm">
   <h2 id="cnHeading">Своя нода</h2>
-  <label class="f" for="cnTitle">Название</label><input type="text" id="cnTitle" maxlength="40" placeholder="Например, «Ревью тимлида»">
+  <label class="f" for="cnTitle">Название</label><input type="text" id="cnTitle" autofocus maxlength="40" placeholder="Например, «Ревью тимлида»">
   <div id="cnActionRows"><label class="f" for="cnScanner">Действие</label><select id="cnScanner"></select>
   <div id="cnLanguageRow" hidden><label class="f" for="cnLanguage">Язык проверки</label><select id="cnLanguage"></select></div></div>
   <p class="note" id="cnPluginHint" hidden>Плагин — отдельный маленький проект. После этого окна откроется редактор: в нём уже стоят ноды «Вход» и «Выход» по числу портов, между ними соберите сканеры, условия и другие шаги.</p>
@@ -195,7 +196,7 @@
   <label class="chk note" id="cnSaveRow"><input type="checkbox" id="cnSave" checked> Сохранить в общем каталоге нод</label>
   <p class="note" id="cnStatus" aria-live="polite"></p>
   <div class="row"><button type="button" class="btn" data-close>Отмена</button><button type="submit" class="btn pri" id="cnCreate">Добавить на холст</button></div>
-</form></div>
+</form></dialog>
 <div class="ov" id="ovAccount"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
   <h2 id="accountTitle" tabindex="-1">Вход</h2>
   <form id="accountForm" method="post">
@@ -226,10 +227,10 @@
   </section>
   <p class="note" id="accountStatus" aria-live="polite"></p>
 </div></div>
-<div class="ov" id="ovPublish"><form class="modal" id="publishForm" role="dialog" aria-modal="true" aria-labelledby="publishTitle">
+<dialog class="modal" id="ovPublish" aria-labelledby="publishTitle"><form id="publishForm">
   <h2 id="publishTitle">Публикация сценария</h2>
   <label class="f" for="publishWorkflow">Сохранённый личный сценарий</label>
-  <select id="publishWorkflow" required></select>
+  <select id="publishWorkflow" required autofocus></select>
   <label class="f" for="publishName">Название</label>
   <input id="publishName" type="text" required maxlength="100">
   <label class="f" for="publishDescription">Описание</label>
@@ -239,13 +240,13 @@
   <p class="note">Все пользователи библиотеки смогут увидеть граф, включая пути и условия. Привязки ZIP и webhook и заметки нод исключаются.</p>
   <p class="note" id="publishStatus" aria-live="polite"></p>
   <div class="row library-actions"><button type="button" class="btn" data-close>Закрыть</button><button type="submit" class="btn pri" id="publishSubmit">Опубликовать</button></div>
-</form></div>
-<div class="ov" id="ovHistory"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+</form></dialog>
+<dialog class="modal" id="ovHistory" aria-labelledby="historyTitle">
   <h2 id="historyTitle">История запусков</h2>
   <p class="note" id="historyWorkflow"></p>
   <div class="run-list" id="historyList" aria-live="polite"></div>
-  <div class="row"><button class="btn" id="historyMore" hidden>Показать ещё</button><button class="btn" data-close>Закрыть</button></div>
-</div></div>
+  <div class="row"><button class="btn" id="historyMore" hidden>Показать ещё</button><button class="btn" autofocus data-close>Закрыть</button></div>
+</dialog>
 <div class="toast" id="toast" role="status"></div>
 
 <script src="./app.js"></script>

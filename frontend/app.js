@@ -3,7 +3,7 @@ const SCANNERS=new Set(["secrets","sca","sast"]);
 T.source={n:"Источник",d:"Файл или папка внутри ZIP",c:"#16767c"};
 // плагин — отдельный граф; внутри него ноды «Вход k» и «Выход k» по числу портов ноды плагина
 const PLUGIN_TYPES={plugin:{n:"Плагин",c:"#2d6cdf"},plugin_input:{n:"Вход",c:"#16767c"},plugin_output:{n:"Выход",c:"#16767c"}};
-const PLUGIN_INNER=new Set(["plugin_input","plugin_output","source","condition","ai","custom",...SCANNERS]);
+const PLUGIN_INNER=new Set(["plugin_input","plugin_output","source","condition","ai","custom","notify",...SCANNERS]);
 const SUPPORTED=new Set(["trigger","source","condition","ai","notify","custom","plugin",...SCANNERS]);
 // Свои ноды: название, цвет и число портов хранятся в config. Порты с номерами («in2», «out3»)
 // нужны только когда их больше одного, так же их проверяет бэкенд.
@@ -13,14 +13,19 @@ const nodeName=n=>n.type==="custom"||n.type==="plugin"?(n.config?.title||(n.type
   n.type==="plugin_input"||n.type==="plugin_output"?`${PLUGIN_TYPES[n.type].n} ${n.config?.index||1}`:(T[n.type]?.n||n.type);
 const nodeColor=n=>n.type==="custom"||n.type==="plugin"?(isColor(n.config?.color)?n.config.color:"#68766d"):(T[n.type]?.c||PLUGIN_TYPES[n.type]?.c||"#68766d");
 const nodeScanner=n=>n.type==="custom"?n.config?.scanner:SCANNERS.has(n.type)?n.type:null;
+function pluginAcceptsSource(n){
+  const graph=n.config?.graph;
+  const inputs=new Set(graph?.nodes?.filter(node=>node.type==="plugin_input").map(node=>node.id));
+  return !!graph?.edges?.some(edge=>edge.targetHandle==="source"&&inputs.has(edge.source))
+}
 function ports(n){if(n.type==="custom")return{ins:(+n.config.inputs||1)+(nodeScanner(n)?1:0),outs:Math.max(0,+n.config.outputs||0)};
-  if(n.type==="plugin")return{ins:+n.config.inputs||1,outs:+n.config.outputs||1};
+  if(n.type==="plugin")return{ins:(+n.config.inputs||1)+Number(pluginAcceptsSource(n)),outs:+n.config.outputs||1};
   if(n.type==="plugin_input")return{ins:0,outs:1};
   if(n.type==="plugin_output")return{ins:1,outs:0};
   return{ins:["trigger","source"].includes(n.type)?0:SCANNERS.has(n.type)?2:1,outs:n.type==="condition"?2:1}}
 function outHandle(n,k){if(n.type==="condition")return k===1?"true":"false";return(n.type==="custom"||n.type==="plugin")&&ports(n).outs>1?"out"+k:null}
 function inHandle(n,k){
-  if(nodeScanner(n)&&k===ports(n).ins)return "source";
+  if((nodeScanner(n)||n.type==="plugin"&&pluginAcceptsSource(n))&&k===ports(n).ins)return "source";
   return(n.type==="custom"||n.type==="plugin")&&n.config.inputs>1?"in"+k:null
 }
 function handleIndex(n,h){if(!h)return 1;if(h==="true")return 1;if(h==="false")return 2;if(h==="source")return ports(n).ins;return +h.replace(/\D/g,"")||1}
@@ -109,7 +114,12 @@ const eid=()=>"e"+Math.random().toString(36).slice(2,9);
 function mk(type,x,y,config){return{id:nid(),type,position:{x,y},config:config||{}}}
 function init(){const a=mk("trigger",40,120,{mode:"manual"});wf.nodes=[a];const b=mk("secrets",270,120);wf.nodes.push(b);const c=mk("condition",500,120,{minSeverity:"high"});wf.nodes.push(c);
   wf.edges=[[a,b],[b,c]].map(([s,t])=>({id:eid(),source:s.id,target:t.id}))}
-function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";clearTimeout(toast.h);toast.h=setTimeout(()=>t.style.display="none",5000)}
+function toast(m){
+  const t=$("#toast"),container=document.querySelector("dialog:modal")||document.body;
+  if(t.parentElement!==container)container.append(t);
+  t.textContent=m;t.style.display="block";clearTimeout(toast.h);
+  toast.h=setTimeout(()=>t.style.display="none",5000)
+}
 const fail=e=>toast(e.message||"Что-то пошло не так");
 const stLabel=s=>({queued:"в очереди",running:"выполняется",succeeded:"готово",failed:"ошибка",skipped:"пропущена"}[s]);
 // Ноды с находками или ошибками обводятся: красным при critical/high и ошибках, жёлтым при medium/low
@@ -217,8 +227,9 @@ bd.addEventListener("wheel",e=>{if(e.ctrlKey||e.metaKey)return;e.preventDefault(
 function connectPorts(src,hd,input){
   const tid=input.dataset.in,hi=input.dataset.hi||undefined;
   if(tid===src.id)return toast("Нельзя соединить ноду с самой собой");
-  if((src.type==="source")!==(hi==="source"))return toast("Соедините «Источник» с одноимённым входом сканера");
-  if(hi==="source"&&wf.edges.some(x=>x.target===tid&&x.targetHandle==="source"))return toast("У сканера уже есть источник");
+  if((src.type==="source"&&hi!=="source")||(hi==="source"&&!["source","plugin_input"].includes(src.type)))
+    return toast("Подключите к этому порту «Источник» или вход плагина");
+  if(hi==="source"&&wf.edges.some(x=>x.target===tid&&x.targetHandle==="source"))return toast("К этому порту уже подключён источник");
   if(wf.edges.some(x=>x.source===src.id&&x.target===tid&&(x.sourceHandle??undefined)===hd&&(x.targetHandle??undefined)===hi))return toast("Такая связь уже есть");
   if(cycle(src.id,tid))return toast("Циклы запрещены: связь замкнёт сценарий");
   wf.edges.push({id:eid(),source:src.id,target:tid,...(hd?{sourceHandle:hd}:{}),...(hi?{targetHandle:hi}:{})});
@@ -271,7 +282,11 @@ bd.addEventListener("pointerdown",ev=>{
     if(lastEdgeClick.id===id&&now-lastEdgeClick.t<400){lastEdgeClick={};removeEdge(id);return}
     lastEdgeClick={id,t:now};sel={t:"e",id};render();return}
   sel=null;render()});
-addEventListener("keydown",e=>{if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName))return;if((e.key==="Delete"||e.key==="Backspace")&&sel)del()});
+addEventListener("keydown",e=>{
+  if(!sel||!["Delete","Backspace"].includes(e.key)||e.defaultPrevented)return;
+  if(["INPUT","SELECT","TEXTAREA"].includes(e.target.tagName)||document.querySelector("dialog[open],.ov.open"))return;
+  del()
+});
 let lastEdgeClick={};
 function removeEdge(id){if(running)return;wf.edges=wf.edges.filter(e=>e.id!==id);if(sel?.t==="e"&&sel.id===id)sel=null;clearReport();toast("Связь удалена")}
 function clearReport(refreshInspector=true){report=null;historicalReport=false;pick=null;render(refreshInspector);renderRep();renderAI();refreshRunButton()}
@@ -333,11 +348,11 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
   const box=document.createElement("div");box.className="insp";let h="";
   if(sel.t==="e")h=`<h3>Связь</h3><p class="note">Удалить связь можно кнопкой «×» на ней, двойным кликом или клавишей Delete.</p><button class="btn" id="delSel" style="margin-top:8px">Удалить связь</button>`;
   else{const n=wf.nodes.find(x=>x.id===sel.id),c=n.config;h=`<h3>${esc(nodeName(n))}</h3>`;
-    if(n.type==="custom")h+=`<label class="f">Название</label><input type="text" data-c="title" maxlength="40" value="${esc(c.title||"")}">
+    if(n.type==="custom")h+=`<label class="f" for="customTitle">Название</label><input type="text" id="customTitle" data-c="title" maxlength="40" value="${esc(c.title||"")}">
       <label class="f" for="customScanner">Действие</label><select id="customScanner" data-c="scanner">${scannerOptions(c.scanner)}</select>
       ${supportsLanguage(c.scanner)?`<label class="f" for="customLanguage">Язык проверки</label><select id="customLanguage" data-c="language">${languageOptions(c.language)}</select>`:""}
-      <div class="ports"><div><label class="f">Входов</label><select data-c="inputs">${[1,2,3,4].map(v=>`<option ${v===+c.inputs?"selected":""}>${v}</option>`).join("")}</select></div>
-      <div><label class="f">Выходов</label><select data-c="outputs">${[0,1,2,3,4].map(v=>`<option ${v===+c.outputs?"selected":""}>${v}</option>`).join("")}</select></div></div>
+      <div class="ports"><div><label class="f" for="customInputs">Входов</label><select id="customInputs" data-c="inputs">${[1,2,3,4].map(v=>`<option ${v===+c.inputs?"selected":""}>${v}</option>`).join("")}</select></div>
+      <div><label class="f" for="customOutputs">Выходов</label><select id="customOutputs" data-c="outputs">${[0,1,2,3,4].map(v=>`<option ${v===+c.outputs?"selected":""}>${v}</option>`).join("")}</select></div></div>
       <label class="f">Цвет</label><div class="swatches">${NODE_COLORS.map(col=>`<button type="button" data-col="${col}" class="${col===c.color?"on":""}" style="background:${col}" aria-label="Цвет ${col}"></button>`).join("")}<input type="color" data-c="color" value="${isColor(c.color)?c.color:"#68766d"}" aria-label="Свой цвет"></div>
       <p class="note">Передаёт входящие и собственные находки на все выходы. Связи с удалёнными портами исчезнут.</p>`;
     if(n.type==="plugin"){const inside=(c.graph?.nodes||[]).filter(x=>x.type!=="plugin_input"&&x.type!=="plugin_output").map(nodeName);
@@ -385,7 +400,7 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
     if(note){note.disabled=running;note.oninput=()=>{node.config.note=note.value};note.onchange=()=>{note.value=note.value.trim();node.config.note=note.value;if(!node.config.note)delete node.config.note;render(false)}}
     box.querySelector("#saveTpl")?.addEventListener("click",()=>saveTemplate(node));
     box.querySelector("#openPluginGraph")?.addEventListener("click",()=>openPluginEditor({config:node.config,canvasNode:node}));
-    box.querySelectorAll("[data-c]").forEach(el=>{el.disabled=running;el.onchange=()=>{const k=el.dataset.c;
+    box.querySelectorAll("[data-c]").forEach(el=>{el.disabled=running;el.onchange=()=>{const k=el.dataset.c,focused=document.activeElement===el;
       const before={...node,config:{...node.config}};
       node.config[k]=k==="inputs"||k==="outputs"?+el.value:k==="title"?(el.value.trim()||"Своя нода"):el.value;
       if(k==="scanner"){
@@ -394,7 +409,9 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
       }
       if(k==="language"&&!el.value)delete node.config.language;
       if(k==="inputs"||k==="outputs"||k==="scanner")updateCustomEdges(node,before);
-      clearReport()}});
+      clearReport();
+      if(focused)document.querySelector(`.insp [data-c="${k}"]`)?.focus({preventScroll:true})
+    }});
     box.querySelectorAll("[data-col]").forEach(b=>b.onclick=()=>{if(running)return;node.config.color=b.dataset.col;render()})}
   $("#delSel")&&($("#delSel").onclick=del)}
 function updateCustomEdges(node,before){
@@ -423,12 +440,24 @@ async function saveTemplate(n){const note=(n.config.note||"").trim();
 // левая панель
 let tab="cat";
 let libTab="std";
+const overlayPanels=matchMedia("(max-width: 900px)");
 function setNodeCatalog(open){
+  if(open&&overlayPanels.matches)setAssistant(false);
   $("#main").classList.toggle("lib-open",open);
-  $("#nodeCatalogBtn").setAttribute("aria-expanded",String(open))
+  const contents=$("#left").querySelectorAll(".tabs,#leftList");
+  if(!open&&[...contents].some(section=>section.contains(document.activeElement)))$("#nodeCatalogBtn").focus();
+  for(const section of contents)section.inert=!open;
+  for(const button of [$("#nodeCatalogBtn"),$("#libTab")])button.setAttribute("aria-expanded",String(open))
+}
+function setAssistant(open){
+  if(open&&overlayPanels.matches)setNodeCatalog(false);
+  const shouldRestoreFocus=!open&&$("#right").contains(document.activeElement);
+  $("#main").classList.toggle("ai-open",open);
+  $("#chatFab").setAttribute("aria-expanded",String(open));
+  if(shouldRestoreFocus)$("#chatFab").focus()
 }
 function addNode(type,config){if(running)return toast("Дождитесь завершения проверки");
-  if(pluginEdit&&!PLUGIN_INNER.has(type))return toast("Внутри плагина можно использовать сканеры, источник, условие, AI-рекомендации и свои ноды");
+  if(pluginEdit&&!PLUGIN_INNER.has(type))return toast("Выберите ноду из каталога редактора плагина");
   if(type==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
   setNodeCatalog(false);
   const nodeConfig=type==="notify"&&!config?.webhookRef&&webhookRefs.includes(TELEGRAM_REF)
@@ -446,16 +475,34 @@ function addNode(type,config){if(running)return toast("Дождитесь зав
 function portsText(c){return`${plural(+c.inputs||1,"вход","входа","входов")}, ${plural(+c.outputs||0,"выход","выхода","выходов")}`}
 function left(){const l=$("#leftList");
   if(tab==="my")return loadMy();
-  const head=`<div class="seg" role="tablist"><button role="tab" data-lib="std" class="${libTab==="std"?"on":""}">Стандартные</button><button role="tab" data-lib="saved" class="${libTab==="saved"?"on":""}">Сохранённые</button></div>
+  const buttons=[["std","Стандартные"],["saved","Сохранённые"]].map(([id,label])=>{
+    const active=libTab===id;
+    return `<button role="tab" id="catalog-${id}" data-lib="${id}" aria-selected="${active}" aria-controls="catalogNodes" tabindex="${active?0:-1}" class="${active?"on":""}">${label}</button>`
+  }).join("");
+  const head=`<div class="seg" role="tablist" aria-label="Виды нод">${buttons}</div>
     <button class="cat new" id="newNode">＋ Создать свою ноду</button>${pluginEdit?"":`<button class="cat new" id="newPluginCat">＋ Создать плагин</button>`}`;
   const allowed=([k])=>!pluginEdit||PLUGIN_INNER.has(k);
-  if(libTab==="std")l.innerHTML=head+(pluginEdit?`<p class="note" style="margin:0">Редактор плагина: запуск и уведомление здесь недоступны.</p>`:"")+Object.entries(T).filter(allowed).map(([k,t])=>`<button class="cat" data-add="${k}"><span class="dot" style="background:${t.c}"></span><span>${t.n}<small>${t.d}${SUPPORTED.has(k)?"":" (пока черновик)"}</small></span></button>`).join("");
-  else{l.innerHTML=head+`<div class="empty">Загрузка…</div>`;loadTemplates()}
-  l.querySelectorAll("[data-lib]").forEach(b=>b.onclick=()=>{libTab=b.dataset.lib;left()});
+  const body=libTab==="std"
+    ?(pluginEdit?`<p class="note" style="margin:0">Граф плагина запускается из сценария через ноду «Вход».</p>`:"")+Object.entries(T).filter(allowed).map(([k,t])=>`<button class="cat" data-add="${k}"><span class="dot" style="background:${t.c}"></span><span>${t.n}<small>${t.d}${SUPPORTED.has(k)?"":" (пока черновик)"}</small></span></button>`).join("")
+    :`<div class="empty">Загрузка…</div>`;
+  l.innerHTML=head+`<div class="catalog-nodes" id="catalogNodes" role="tabpanel" aria-labelledby="catalog-${libTab}">${body}</div>`;
+  if(libTab==="saved")loadTemplates($("#catalogNodes"));
+  const activate=key=>{
+    if(libTab!==key){libTab=key;left()}
+    $("#catalog-"+key).focus()
+  };
+  l.querySelectorAll("[data-lib]").forEach(button=>{
+    button.onclick=()=>activate(button.dataset.lib);
+    button.onkeydown=event=>{
+      const other=button.dataset.lib==="std"?"saved":"std";
+      const key={ArrowLeft:other,ArrowRight:other,Home:"std",End:"saved"}[event.key];
+      if(key){event.preventDefault();activate(key)}
+    }
+  });
   $("#newNode").onclick=()=>openNodeDialog();
   $("#newPluginCat")?.addEventListener("click",()=>openPluginEditor());
   l.querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{const k=b.dataset.add;addNode(k,k==="condition"?{minSeverity:"high"}:k==="trigger"?{mode:"manual"}:k==="source"?{path:"."}:{})})}
-async function loadTemplates(){const l=$("#leftList"),loading=l.querySelector(".empty");
+async function loadTemplates(l){const loading=l.querySelector(".empty");
   let templates;
   try{templates=await api("/node-templates")}catch(e){if(loading.isConnected)loading.textContent=e.message||"Не удалось загрузить сохранённые ноды";return}
   if(!loading.isConnected)return;
@@ -474,17 +521,19 @@ function paintSwatches(){const box=$("#cnColors");
   $("#cnCustom").oninput=e=>{cnColor=e.target.value;box.querySelectorAll("[data-col]").forEach(b=>b.classList.toggle("on",b.dataset.col===cnColor))}}
 function openNodeDialog({pluginMode=false,plugin=null,config={}}={}){
   if(running)return toast("Дождитесь завершения проверки");
-  nodeEditor={pluginMode,id:plugin?.id,owner:account?.id,origin:API};
-  $("#cnHeading").textContent=plugin?.id?"Редактировать плагин":pluginMode?"Создать плагин":"Своя нода";
+  const legacy=!!(pluginMode&&plugin?.id&&!config.graph&&!pluginEdit);
+  nodeEditor={pluginMode,legacy,id:plugin?.id,owner:account?.id,origin:API};
+  const editingPlugin=pluginMode&&!!(plugin?.id||pendingPlugin?.canvasNode||pluginEdit);
+  $("#cnHeading").textContent=editingPlugin?"Редактировать плагин":pluginMode?"Создать плагин":"Своя нода";
   $("#cnTitle").value=config.title||"";$("#cnNote").value=config.note||"";
   $("#cnIn").value=config.inputs??1;$("#cnOut").value=config.outputs??1;
   $("#cnScanner").innerHTML=scannerOptions(config.scanner);
   $("#cnLanguage").innerHTML=languageOptions(config.language);
   $("#cnLanguageRow").hidden=!supportsLanguage(config.scanner);
   $("#cnSave").checked=true;$("#cnSaveRow").hidden=pluginMode;
-  $("#cnActionRows").hidden=pluginMode;$("#cnPluginHint").hidden=!pluginMode||!!pluginEdit;
-  $("#cnOut").querySelector('option[value="0"],option:first-child').disabled=pluginMode;
-  if(pluginMode&&+$("#cnOut").value<1)$("#cnOut").value=1;
+  $("#cnActionRows").hidden=pluginMode&&!legacy;$("#cnPluginHint").hidden=!pluginMode||!!pluginEdit||legacy;
+  $("#cnOut").querySelector('option[value="0"],option:first-child').disabled=pluginMode&&!legacy;
+  if(pluginMode&&!legacy&&+$("#cnOut").value<1)$("#cnOut").value=1;
   // копия плагина на холсте живёт только в сценарии: описание и доступ нужны лишь плагину в библиотеке
   const canvasCopy=pluginMode&&!!(pendingPlugin?.canvasNode||pluginEdit?.canvasNodeId);
   $("#cnPluginFields").hidden=!pluginMode||canvasCopy;
@@ -493,9 +542,9 @@ function openNodeDialog({pluginMode=false,plugin=null,config={}}={}){
   $("#cnPublicNote").hidden=$("#cnVisibility").value!=="public";
   $("#cnStatus").textContent="";
   $("#cnCreate").disabled=false;
-  $("#cnCreate").textContent=pluginMode?(pluginEdit?"Применить":"Открыть редактор"):"Добавить на холст";
+  $("#cnCreate").textContent=legacy?"Сохранить плагин":pluginMode?(pluginEdit?"Применить":"Открыть редактор"):"Добавить на холст";
   cnColor=isColor(config.color)?config.color:NODE_COLORS[4];paintSwatches();
-  $("#ovNode").classList.add("open");$("#cnTitle").focus()
+  $("#ovNode").showModal()
 }
 function openPluginEditor({plugin=null,config=plugin?.config||{},canvasNode=null}={}){
   if(!account&&!canvasNode){  // правка ноды на холсте ничего не сохраняет в аккаунт
@@ -535,7 +584,7 @@ function enterPluginEditor(meta,graph,plugin,canvasNode=null){
   syncPluginPorts(meta);
   if(!graph?.edges?.length&&meta.inputs===1&&meta.outputs===1)wf.edges.push({id:eid(),source:"in1",target:"out1"});
   showPluginBar();focusCanvas();clearReport();left();
-  toast("Соберите шаги плагина между нодами «Вход» и «Выход», затем нажмите «Сохранить плагин».")
+  if(!graph)toast("Соберите шаги плагина между нодами «Вход» и «Выход».")
 }
 function leavePluginEditor(){
   const saved=pluginEdit.saved;pluginEdit=null;
@@ -545,7 +594,8 @@ function leavePluginEditor(){
   setPan(saved.pan.x,saved.pan.y);render();renderRep();renderAI();left()
 }
 function pluginProblem(){
-  const disconnected=wf.nodes.find(n=>!["plugin_input","source"].includes(n.type)&&!wf.edges.some(e=>e.target===n.id&&e.targetHandle!=="source"));
+  const inputs=new Set(wf.nodes.filter(node=>node.type==="plugin_input").map(node=>node.id));
+  const disconnected=wf.nodes.find(n=>!["plugin_input","source"].includes(n.type)&&!wf.edges.some(e=>e.target===n.id&&(e.targetHandle!=="source"||inputs.has(e.source))));
   if(disconnected)return`Подключите ноду «${nodeName(disconnected)}»: у каждого шага и каждого выхода должна быть входящая связь.`;
   const bad=wf.nodes.find(n=>!PLUGIN_INNER.has(n.type));
   if(bad)return`Нода «${nodeName(bad)}» не может стоять внутри плагина.`;
@@ -602,10 +652,21 @@ $("#customNodeForm").onsubmit=async event=>{
     const description=$("#cnDescription").value.trim();
     const onCanvas=pluginEdit?.canvasNodeId||pendingPlugin?.canvasNode;
     if(!description&&!onCanvas){status.textContent="Добавьте описание плагина.";$("#cnDescription").focus();return}
+    if(edit.legacy){
+      button.disabled=true;
+      try{
+        await api("/plugins/"+encodeURIComponent(edit.id),{method:"PUT",headers:JH,body:JSON.stringify({
+          config,description,visibility:$("#cnVisibility").value
+        })});
+        pendingPlugin=null;$("#ovNode").close();refreshLibrary();toast("Плагин сохранён.")
+      }catch(error){status.textContent=error.message}
+      finally{button.disabled=false}
+      return
+    }
     if(config.outputs<1){status.textContent="У плагина должен быть хотя бы один выход.";return}
     const meta={title,color:cnColor,inputs:config.inputs,outputs:config.outputs,description,visibility:$("#cnVisibility").value};
     if(note)meta.note=note;
-    $("#ovNode").classList.remove("open");
+    $("#ovNode").close();
     if(pluginEdit){pluginEdit.meta=meta;syncPluginPorts(meta);showPluginBar();clearReport();return}
     const pending=pendingPlugin;pendingPlugin=null;
     if(setNodeCatalog)setNodeCatalog(false);
@@ -614,13 +675,14 @@ $("#customNodeForm").onsubmit=async event=>{
     return
   }
   if(!addNode("custom",{...config}))return;
-  $("#ovNode").classList.remove("open");
+  $("#ovNode").close();
   if($("#cnSave").checked){try{await api("/node-templates",{method:"POST",headers:JH,body:JSON.stringify({name:title,type:"custom",config})});toast("Нода добавлена и сохранена");if(tab==="cat"&&libTab==="saved")left()}catch(error){fail(error)}}
 };
 async function loadMy(){const l=$("#leftList");l.innerHTML=`<div class="empty">Загрузка…</div>`;
+  if(pluginEdit){l.textContent="Закройте редактор плагина, чтобы открыть сценарий.";return}
   const token=ss.get(accountTokenKey()),origin=API;
   try{const list=await api("/workflows");
-    if(tab!=="my"||token!==ss.get(accountTokenKey())||API!==origin)return;
+    if(tab!=="my"||pluginEdit||token!==ss.get(accountTokenKey())||API!==origin)return;
     l.innerHTML=list.length?list.map((s,i)=>`<button class="cat" data-i="${i}"><span>${esc(s.name)}<small>${s.languagePlugins?"Личный сценарий":"Общий сценарий"}</small></span></button>`).join(""):`<div class="empty">Сохранённых сценариев пока нет. Откройте «Файл» → «Сохранить».</div>`;
     l.querySelectorAll("[data-i]").forEach(b=>b.onclick=async()=>{if(running)return toast("Дождитесь завершения проверки");if(!(await canReplaceGraph()))return;wf=JSON.parse(JSON.stringify(list[b.dataset.i]));wf.nodes.forEach(n=>n.config=n.config||{});savedGraph=graphSnapshot(wf);$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()})}
   catch(e){if(tab==="my"&&token===ss.get(accountTokenKey())&&API===origin)l.innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
@@ -645,18 +707,38 @@ async function canReplaceGraph(){
   }
   return choice==="discard"
 }
-async function save({personalCopy=false}={}){const current=wf;current.name=$("#wfName").value.trim()||"Без названия";
+const pendingSaves=new WeakMap();
+async function save({personalCopy=false}={}){
+  const current=wf,origin=API,token=ss.get(accountTokenKey());
+  current.name=$("#wfName").value.trim()||"Без названия";
+  const copy=Boolean(personalCopy&&current.id&&!Array.isArray(current.languagePlugins));
   // A personal run must not register a second schedule for a shared workflow.
-  const nodes=personalCopy?current.nodes.map(node=>{
+  const nodes=copy?current.nodes.map(node=>{
     if(node.type!=="trigger"||node.config.mode!=="daily")return node;
     const {scheduleSourceId,scheduleSourceName,...config}=node.config;
     return {...node,config:{...config,mode:"manual"}}
   }):current.nodes;
-  const id=personalCopy?"":current.id;
   const snapshot=graphSnapshot({...current,nodes});
-  const r=await api(id?"/workflows/"+id:"/workflows",{method:id?"PUT":"POST",headers:JH,body:JSON.stringify({name:current.name,nodes,edges:current.edges})});
-  if(wf===current)savedGraph=snapshot;
-  current.id=r.id;current.nodes=nodes;current.languagePlugins=r.languagePlugins;return r}
+  const pending=pendingSaves.get(current);
+  if(pending){
+    const result=await pending.request;
+    if(pending.snapshot===snapshot&&pending.copy===copy)return result;
+    if(wf!==current||origin!==API||token!==ss.get(accountTokenKey()))throw {message:"Рабочее пространство изменилось."};
+    return save({personalCopy})
+  }
+  const id=copy?"":current.id;
+  const request=api(id?"/workflows/"+id:"/workflows",{
+    method:id?"PUT":"POST",headers:JH,body:snapshot
+  }).then(result=>{
+    if(wf===current)savedGraph=snapshot;
+    if(copy)current.nodes=nodes;
+    current.id=result.id;current.languagePlugins=result.languagePlugins;
+    return result
+  });
+  pendingSaves.set(current,{request,snapshot,copy});
+  try{return await request}
+  finally{if(pendingSaves.get(current)?.request===request)pendingSaves.delete(current)}
+}
 $("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("open")};
 addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
 $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a;
@@ -664,7 +746,7 @@ $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const
   if(pluginEdit&&a!=="dl")return toast("Сначала сохраните или закройте редактор плагина");
   if(a==="generate")return openGenerator();
   if(a==="new"){if(!(await canReplaceGraph()))return;wf={id:"",name:"Новый сценарий",nodes:[],edges:[]};savedGraph=graphSnapshot(wf);$("#wfName").value=wf.name;sel=null;focusCanvas();clearReport()}
-  if(a==="dl"){const{id,...d}=wf;d.name=$("#wfName").value;$("#jsonOut").value=JSON.stringify(d,null,2);$("#ovJson").classList.add("open")}
+  if(a==="dl"){const{id,...d}=wf;d.name=$("#wfName").value;$("#jsonOut").value=JSON.stringify(d,null,2);$("#ovJson").showModal()}
   if(a==="save"){try{await save();toast("Сценарий сохранён");if(tab==="my")left()}catch(e){fail(e)}}});
 $("#jsonCopy").onclick=async()=>{try{await navigator.clipboard.writeText($("#jsonOut").value);toast("JSON скопирован")}catch(e){$("#jsonOut").select();toast("Выделено — скопируйте вручную")}};
 function downloadJson(filename,text){
@@ -673,7 +755,11 @@ function downloadJson(filename,text){
   setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
 $("#jsonDownload").onclick=()=>downloadJson("workflow.json",$("#jsonOut").value);
-document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>b.closest(".ov").classList.remove("open"));
+document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>{
+  const dialog=b.closest("dialog");
+  if(dialog)dialog.close();
+  else b.closest(".ov").classList.remove("open")
+});
 // Генерация создаёт отдельный черновик и меняет граф только по кнопке «Открыть».
 let generation=null;
 function resetGenerationPreview(){
@@ -689,8 +775,7 @@ function openGenerator(){
   $("#generateRun").disabled=false;
   $("#generatePrompt").disabled=false;
   resetGenerationPreview();
-  $("#ovGenerate").classList.add("open");
-  $("#generatePrompt").focus()
+  $("#ovGenerate").showModal()
 }
 $("#generatePrompt").oninput=()=>{
   if(generation?.draft){
@@ -715,7 +800,7 @@ $("#generateForm").onsubmit=async event=>{
     const result=await api("/workflows/generate",{method:"POST",headers:JH,body:JSON.stringify({
       description,modelId,allowExternal,timezone:TRIGGER_DEFAULTS.scheduleTimezone
     })});
-    if(generation!==current||!$("#ovGenerate").classList.contains("open"))return;
+    if(generation!==current||!$("#ovGenerate").open)return;
     current.draft=result.draft;
     $("#generateName").textContent=result.draft.name;
     const {flow,scope}=draftPreview(result.draft);
@@ -738,7 +823,7 @@ $("#generateForm").onsubmit=async event=>{
     $("#generatePreview").hidden=false;$("#generateApply").hidden=false;
     status.textContent=result.usedRules?"Черновик собран по локальным правилам. Модель не подключена.":"Черновик готов."
   }catch(error){
-    if(generation!==current||!$("#ovGenerate").classList.contains("open"))return;
+    if(generation!==current||!$("#ovGenerate").open)return;
     if(error.code==="consent_required")$("#generateConsentRow").hidden=false;
     status.textContent=({
       consent_required:"Подтвердите отправку описания в DeepSeek.",
@@ -756,7 +841,7 @@ $("#generateApply").onclick=async()=>{
   savedGraph=null;
   wf={...generation.draft,id:""};
   $("#wfName").value=wf.name;sel=null;focusCanvas();clearReport();
-  $("#ovGenerate").classList.remove("open")
+  $("#ovGenerate").close()
 };
 // связь с бэкендом и настройки
 async function loadWebhookRefs(origin){
@@ -980,7 +1065,9 @@ async function loadLibrary(offset=0){
   try{
     const rows=await api("/workflow-templates?"+params);
     if(request!==libraryRequest)return;
-    for(const template of rows.slice(0,LIBRARY_PAGE_SIZE))list.append(templateCard(template));
+    for(const template of rows.slice(0,LIBRARY_PAGE_SIZE)){
+      if(![...list.children].some(card=>card.dataset.libraryId===template.id))list.append(templateCard(template))
+    }
     libraryOffset=offset+Math.min(LIBRARY_PAGE_SIZE,rows.length);
     status.textContent=offset===0&&!rows.length?(libraryQuery?"По этому запросу шаблонов нет.":"Шаблонов пока нет."):"";
     more.hidden=rows.length<=LIBRARY_PAGE_SIZE
@@ -1002,7 +1089,9 @@ async function loadPluginLibrary(offset=0){
     const params=new URLSearchParams({q:pluginQuery,limit:LIBRARY_PAGE_SIZE+1,offset});
     const plugins=await api("/plugins?"+params);
     if(request!==pluginRequest)return;
-    for(const plugin of plugins.slice(0,LIBRARY_PAGE_SIZE))list.append(pluginCard(plugin));
+    for(const plugin of plugins.slice(0,LIBRARY_PAGE_SIZE)){
+      if(![...list.children].some(card=>card.dataset.libraryId===plugin.id))list.append(pluginCard(plugin))
+    }
     pluginOffset=offset+Math.min(LIBRARY_PAGE_SIZE,plugins.length);
     status.textContent=offset===0&&!plugins.length?(pluginQuery?"По этому запросу плагинов нет.":"Плагинов пока нет."):"";
     more.hidden=plugins.length<=LIBRARY_PAGE_SIZE
@@ -1017,6 +1106,7 @@ $("#newPlugin").onclick=()=>openPluginEditor();
 
 function pluginCard(plugin){
   const card=document.createElement("article");card.className="library-card";
+  card.dataset.libraryId=plugin.id;
   const graph=plugin.config.graph;
   const inside=graph?(graph.nodes||[]).filter(x=>x.type!=="plugin_input"&&x.type!=="plugin_output").map(nodeName).join(", "):"";
   const action=graph?`${portsText(plugin.config)} · внутри: ${inside||"только передача находок"}`:T[plugin.config.scanner]?.n||"Передача находок";
@@ -1059,6 +1149,7 @@ async function addPluginNode(id,button){
 
 function templateCard(template){
   const card=document.createElement("article");card.className="library-card";
+  card.dataset.libraryId=template.id;
   card.innerHTML=`<h2>${esc(template.title)}</h2><p class="note">Автор: ${esc(template.author)}</p>
     <p class="library-description">${esc(template.description)}</p>
     ${template.tags.length?`<div class="library-tags">${template.tags.map(tag=>`<button class="btn">${esc(tag)}</button>`).join("")}</div>`:""}
@@ -1099,11 +1190,11 @@ async function openPublish(template){
   }
   const owner=account.id,select=$("#publishWorkflow"),status=$("#publishStatus"),button=$("#publishSubmit");
   $("#publishForm").reset();select.replaceChildren();
-  $("#ovPublish").classList.add("open");
+  $("#ovPublish").showModal();
   button.disabled=true;status.textContent="Загружаем личные сценарии…";
   try{
     const workflows=(await api("/workflows")).filter(workflow=>Array.isArray(workflow.languagePlugins));
-    if(owner!==account?.id||!$("#ovPublish").classList.contains("open"))return;
+    if(owner!==account?.id||!$("#ovPublish").open)return;
     for(const workflow of workflows)select.add(new Option(workflow.name,workflow.id));
     if(!workflows.length){status.textContent="Сначала сохраните личный сценарий в редакторе.";return}
     const preferred=template?.workflowId||wf.id;
@@ -1133,7 +1224,7 @@ $("#publishForm").onsubmit=async event=>{
       workflowId:$("#publishWorkflow").value,title:$("#publishName").value.trim(),
       description:$("#publishDescription").value.trim(),tags
     })});
-    $("#ovPublish").classList.remove("open");searchLibrary("");toast("Шаблон опубликован.")
+    $("#ovPublish").close();searchLibrary("");toast("Шаблон опубликован.")
   }catch(error){status.textContent=error.message}
   finally{button.disabled=false}
 };
@@ -1144,9 +1235,18 @@ function activeModel(){return tabModel()||llmSettings?.defaultId||null}
 function modelChoice(){const id=tabModel();return id?{modelId:id,allowExternal:ss.get("cg_model_consent")===id}:{}}
 function llmReason(o){return{connection_error:"локальный сервер моделей не отвечает. Запущена ли Ollama?",model_missing:`модель не скачана. Выполните ollama pull ${o.model}`,no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY",budget_exceeded:"дневной лимит DeepSeek на сервере исчерпан"}[o.reason]||o.reason}
 const CHECK_ERRORS={auth_error:"провайдер отклонил ключ API",billing_error:"на аккаунте провайдера недостаточно средств",connection_error:"сервер модели недоступен",model_missing:"такой модели нет на сервере",timeout:"модель не ответила вовремя",rate_limited:"провайдер ограничил частоту запросов",consent_required:"нужно согласие на отправку в DeepSeek",no_api_key:"на бэкенде не задан DEEPSEEK_API_KEY",unknown_model:"бэкенд не предлагает эту модель",budget_exceeded:"дневной лимит DeepSeek на сервере исчерпан",usage_limited:"слишком много запросов к DeepSeek за минуту"};
-async function loadLlm(){const s=$("#llmModel"),st=$("#llmStatus");s.disabled=true;st.textContent="Загружаю список моделей…";$("#llmConsent").checked=false;
-  try{llmSettings=await api("/settings/llm")}
-  catch(e){llmSettings=null;s.innerHTML="";$("#llmConsentRow").hidden=true;st.innerHTML=`<span style="color:var(--bad)">${esc(e.code==="http_error"?"Эта версия бэкенда не поддерживает выбор модели.":e.message)}</span>`;renderAI();return}
+let llmSettingsRequest=0;
+async function loadLlm(){const s=$("#llmModel"),st=$("#llmStatus"),origin=API,request=++llmSettingsRequest;
+  s.disabled=true;st.textContent="Загружаю список моделей…";$("#llmConsent").checked=false;
+  try{
+    const settings=await api("/settings/llm");
+    if(origin!==API||request!==llmSettingsRequest)return;
+    llmSettings=settings
+  }
+  catch(e){
+    if(origin!==API||request!==llmSettingsRequest)return;
+    llmSettings=null;s.innerHTML="";$("#llmConsentRow").hidden=true;st.innerHTML=`<span style="color:var(--bad)">${esc(e.code==="http_error"?"Эта версия бэкенда не поддерживает выбор модели.":e.message)}</span>`;renderAI();return
+  }
   const groups=[["local","Локальная модель: данные остаются на компьютере"],["deepseek","DeepSeek API: внешний сервис"]];
   const cur=activeModel(),known=llmSettings.options.some(o=>o.id===cur);
   s.innerHTML=(cur?"":`<option value="">Не выбрана</option>`)+(cur&&!known?`<option value="${esc(cur)}">${esc(modelLabel(cur))} (нет в списке)</option>`:"")+groups.map(([p,title])=>{const list=llmSettings.options.filter(o=>o.provider===p);
@@ -1168,13 +1268,15 @@ $("#llmCheck").onclick=async()=>{const id=$("#llmModel").value;if(!id)return;
   try{llmStatusNote(checkText(await checkLlm(id)))}catch(e){llmStatusNote(` <span style="color:var(--bad)">${esc(CHECK_ERRORS[e.code]||e.message)}</span>`)}
   finally{$("#llmCheck").disabled=false}};
 const settings=$("#ovSet");
-settings.addEventListener("keydown",e=>{
+function wrapDialogTab(e){
   if(e.key!=="Tab")return;
-  const controls=[...settings.querySelectorAll("button,input,select")].filter(el=>!el.disabled&&el.getClientRects().length);
+  const controls=[...e.currentTarget.querySelectorAll("button,input,select,textarea,a[href],[tabindex]")]
+    .filter(el=>!el.disabled&&el.tabIndex>=0&&el.getClientRects().length);
   const first=controls[0],last=controls.at(-1);
   if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}
   if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}
-});
+}
+settings.addEventListener("keydown",wrapDialogTab);
 new MutationObserver(()=>{if(!settings.classList.contains("open"))$("#gear").focus()}).observe(settings,{attributes:true,attributeFilter:["class"]});
 $("#gear").onclick=()=>{$("#apiUrl").value=API;$("#apiUrl").placeholder=DEFAULT_API;$("#ovSet").classList.add("open");$("#apiUrl").focus();loadLlm()};
 $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/+$/,"")||DEFAULT_API;
@@ -1205,7 +1307,7 @@ $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/
     return toast(`Модель в этой вкладке: ${modelLabel(id)}. Ответ за ${r.seconds} с.`)}
   $("#ovSet").classList.remove("open");toast(await ping()?"Подключение проверено":"Нет связи с бэкендом по адресу "+API)};
 $("#theme").onclick=()=>{const d=document.documentElement,dark=d.dataset.theme?d.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;d.dataset.theme=dark?"light":"dark"};
-$("#aiToggle").onclick=()=>$("#main").classList.remove("ai-open");
+$("#aiToggle").onclick=()=>setAssistant(false);
 // источник
 let sourceLoading=false;
 const REPO_ERRORS={
@@ -1257,7 +1359,7 @@ async function pollRun(runId){
   for(let i=0;i<150;i++){
     await wait(failures?800*2**failures:800);
     try{
-      const next=await api("/runs/"+encodeURIComponent(runId));
+      const next=await api("/runs/"+encodeURIComponent(runId),{signal:AbortSignal.timeout(10000)});
       if(next?.runId!==runId||!Array.isArray(next.nodes)||!["queued","running","succeeded","failed"].includes(next.status))
         throw {code:"invalid_run_status",message:"API вернул некорректный статус проверки."};
       report=next;
@@ -1314,7 +1416,7 @@ const HISTORY_PAGE_SIZE=25;
 const historyTime=new Intl.DateTimeFormat("ru",{dateStyle:"short",timeStyle:"short"});
 let historyView=null;
 function historyIsOpen(view){
-  return historyView===view&&$("#ovHistory").classList.contains("open")&&wf.id===view.workflowId
+  return historyView===view&&$("#ovHistory").open&&wf.id===view.workflowId
 }
 async function loadHistory(view){
   const list=$("#historyList"),more=$("#historyMore");
@@ -1348,7 +1450,7 @@ async function openHistoryReport(view,runId,button){
     if(!historyIsOpen(view)||running)return;
     if(saved.status==="queued"||saved.status==="running")return toast("Запуск ещё выполняется. Откройте отчёт после завершения.");
     report=saved;historicalReport=true;pick=null;sel=null;
-    $("#ovHistory").classList.remove("open");openRep();render();renderRep();renderAI()
+    $("#ovHistory").close();openRep();render();renderRep();renderAI()
   }catch(e){if(historyIsOpen(view))fail(e)}
   finally{view.opening=false;button.disabled=false}
 }
@@ -1358,7 +1460,7 @@ $("#runHistory").onclick=()=>{
   historyView={workflowId:wf.id,offset:0,opening:false,seen:new Set()};
   $("#historyWorkflow").textContent=wf.name;
   $("#historyList").textContent="Загружаем историю…";
-  $("#historyMore").hidden=true;$("#ovHistory").classList.add("open");
+  $("#historyMore").hidden=true;$("#ovHistory").showModal();
   loadHistory(historyView)
 };
 $("#historyMore").onclick=()=>loadHistory(historyView);
@@ -1454,12 +1556,26 @@ function renderRep(){const b=$("#repBody");$("#findingsDownload").hidden=!report
   $("#repTag").textContent=(historicalReport?"Из истории · ":"")+report.runId.slice(0,8)+" · "+stLabel(report.status)+(report.triggerMode==="daily"?" · по расписанию":"");
   const fs=report.findings||[];
   const findings=new Map(fs.map(f=>[f.id,f]));
-  const innerNode=id=>{const cut=id.indexOf("/");if(cut<0)return null;const parent=wf.nodes.find(n=>n.id===id.slice(0,cut));
-    const inner=parent?.config?.graph?.nodes?.find(n=>n.id===id.slice(cut+1));return inner?{parent,inner}:null};
-  const nodes=new Map(report.nodes.map(result=>[result.nodeId,
-    innerNode(result.nodeId)?.inner||(result.type?{type:result.type,config:{...(wf.nodes.find(n=>n.id===result.nodeId)?.config||{}),title:result.label||wf.nodes.find(n=>n.id===result.nodeId)?.config?.title}}:wf.nodes.find(n=>n.id===result.nodeId))]));
-  const names=new Map([...nodes].map(([id,node])=>{const inside=innerNode(id);
-    return[id,inside?`${nodeName(inside.parent)} › ${nodeName(inside.inner)}`:node?nodeName(node):id]}));
+  const canvasNodes=new Map(wf.nodes.map(node=>[node.id,node]));
+  const nodes=new Map(report.nodes.map(result=>{
+    const fallback=historicalReport?null:canvasNodes.get(result.nodeId);
+    const node=result.type?{type:result.type,config:{
+      title:result.label??fallback?.config?.title,index:result.portIndex??fallback?.config?.index
+    }}:fallback;
+    return [result.nodeId,node]
+  }));
+  const names=new Map([...nodes].map(([id,node])=>{
+    if(!node)return [id,id];
+    const port=node.type==="plugin_input"||node.type==="plugin_output";
+    const name=port&&node.config.index==null?`${PLUGIN_TYPES[node.type].n} (${id.slice(id.indexOf("/")+1)})`:nodeName(node);
+    return [id,name]
+  }));
+  for(const id of names.keys()){
+    const cut=id.indexOf("/");
+    if(cut<0)continue;
+    const parent=names.get(id.slice(0,cut));
+    if(parent)names.set(id,`${parent} › ${names.get(id)}`)
+  }
   const sameRun=b.dataset.runId===report.runId;
   const openGroups=new Set(sameRun?Array.from(b.querySelectorAll("details[data-group][open]"),e=>e.dataset.group):[]);
   const openTransfers=new Set(sameRun?Array.from(b.querySelectorAll(".node-transfer[open]"),e=>e.dataset.node):[]);
@@ -1497,10 +1613,16 @@ function renderChat(scroll = false) {
   const input = $("#chatIn");
   const button = $("#chatBtn");
   const log = $("#chatLog");
-  if (chatState.runId !== runId && !chatState.pending) {
-    const {turns,generating,error}=chatState;
-    chatState = {runId, turns: turns.filter(turn=>turn.generation), pending: false, error: generating?error:""};
-    if(!generating)input.value = "";
+  if (chatState.runId !== runId) {
+    const {turns,generating,pending,error}=chatState;
+    const drafts=turns.filter(turn=>turn.generation);
+    if(pending&&generating){
+      chatState.runId=runId;
+      chatState.turns=drafts;
+    }else{
+      chatState={runId,turns:drafts,pending:false,generating,error:generating?error:""};
+      if(!generating)input.value="";
+    }
   }
   input.disabled = button.disabled = running || chatState.pending;
   input.placeholder = running ? "Дождитесь завершения проверки" : ready ? "Вопрос по отчёту или «создай сценарий…»" : "Опишите проверку — соберу сценарий";
@@ -1662,11 +1784,23 @@ init();savedGraph=graphSnapshot(wf);left();render();renderRep();renderAI();resto
 // Панели и библиотека
 (()=>{
   const main=$("#main");
-  if(innerWidth<=900)main.classList.remove("ai-open");
+  if(overlayPanels.matches)setAssistant(false);
+  overlayPanels.addEventListener("change",event=>{if(event.matches)setAssistant(false)});
   const lib=()=>setNodeCatalog(!main.classList.contains("lib-open"));
   $("#nodeCatalogBtn").onclick=lib;$("#libTab").onclick=lib;
-  $("#chatFab").onclick=()=>{main.classList.add("ai-open");$("#chatIn").focus()};
+  $("#chatFab").onclick=()=>{setAssistant(true);$("#chatIn").focus()};
   document.querySelector('[data-a="zip"]').addEventListener("click",()=>{if(!running)$("#fileIn").click()});
-  ["ovSet","ovJson","ovHistory","ovGenerate","ovPublish"].forEach(id=>{const o=$("#"+id);o.addEventListener("pointerdown",e=>{if(e.target===o)o.classList.remove("open")})});
+  $("#ovSet").addEventListener("pointerdown",e=>{if(e.target===e.currentTarget)e.currentTarget.classList.remove("open")});
+  $("#ovNode").addEventListener("keydown",wrapDialogTab);
+  for(const [id,opener] of [["ovJson","fileBtn"],["ovGenerate","fileBtn"],["ovHistory","runHistory"],["ovPublish","libraryPublish"]]){
+    const dialog=$("#"+id);
+    dialog.addEventListener("close",()=>$("#"+opener).focus());
+    dialog.addEventListener("keydown",wrapDialogTab);
+    dialog.addEventListener("pointerdown",event=>{
+      if(event.target!==dialog)return;
+      const {left,top,right,bottom}=dialog.getBoundingClientRect();
+      if(event.clientX<left||event.clientX>right||event.clientY<top||event.clientY>bottom)dialog.close()
+    })
+  }
   addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("#replaceGraph").open)document.querySelectorAll(".ov.open").forEach(o=>o.classList.remove("open"))});
 })();

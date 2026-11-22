@@ -36,6 +36,7 @@ aside{background:var(--panel);min-height:0;display:flex;flex-direction:column}
 .tabs button{flex:1;border:0;background:none;padding:10px 6px;color:var(--mute);border-bottom:2px solid transparent}
 .tabs button.on{color:var(--ink);border-color:var(--acc);font-weight:600}
 .list{padding:10px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.catalog-nodes{display:flex;flex-direction:column;gap:6px}
 .cat{display:flex;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 10px}
 .cat:hover{border-color:var(--acc)}
 .cat small{display:block;color:var(--mute);font-size:12px}
@@ -75,8 +76,10 @@ svg.edges .edge-x:hover circle{fill:var(--bad)}
 svg.edges .edge-x:hover path{stroke:#fff}
 svg.edges text{font-size:11px;fill:var(--mute)}
 /* plugin editor: a banner over the canvas while a plugin's own graph is open */
-.plugin-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:6;display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:calc(100% - 32px);background:var(--card);border:2px solid var(--acc);border-radius:16px;padding:8px 12px;box-shadow:0 8px 24px rgba(0,0,0,.14)}
+.plugin-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:6;display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:max-content;max-width:calc(100% - 32px);background:var(--card);border:2px solid var(--acc);border-radius:16px;padding:8px 12px;box-shadow:0 8px 24px rgba(0,0,0,.14)}
 .plugin-bar[hidden]{display:none}
+.plugin-bar>span{min-width:0;overflow-wrap:anywhere}
+.plugin-bar>.btn{white-space:nowrap}
 .plugin-bar small{color:var(--mute)}
 body.plugin-editing #runBtn{opacity:.5}
 .node.port-node{border-style:dashed}
@@ -187,10 +190,12 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 .ov.open{display:flex}
 .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(460px,100%);max-height:90vh;overflow:auto}
 .modal h2{margin:0 0 4px;font-size:18px}
-.modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.modal .row{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:14px}
 #replaceGraph{color:var(--ink);width:min(460px,calc(100% - 24px))}
 #replaceGraph .row{flex-wrap:wrap}
-#replaceGraph::backdrop{background:rgba(0,0,0,.55)}
+dialog.modal{color:var(--ink);max-width:calc(100% - 24px)}
+#ovJson{color:var(--ink);width:min(640px,calc(100% - 24px))}
+dialog.modal::backdrop{background:rgba(0,0,0,.55)}
 .app.library-open{grid-template-rows:auto minmax(0,1fr)}
 .app.library-open :is(.src,#main,#fileMenu,#nodeCatalogBtn,#wfName,#runBtn){display:none}
 .workflow-library{min-height:0;overflow:auto;background:var(--bg)}
@@ -223,7 +228,7 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 #ovGenerate .generate-actions{flex-wrap:wrap}
 #ovAccount .account-actions{flex-wrap:wrap}
 .modal textarea{width:100%;height:280px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
-.toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;z-index:60;display:none;max-width:90vw}
+.toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;z-index:60;display:none;width:max-content;max-width:min(90vw,560px);overflow-wrap:anywhere;text-align:center;pointer-events:none}
 .chk{display:flex;gap:8px;align-items:center;margin-top:10px}
 .chk[hidden]{display:none}
 /* ===== Дизайн по макетам Figma: зелёная панель, скруглённые поля, светлая и тёмная темы ===== */
@@ -278,8 +283,8 @@ main.lib-open #left{transform:none}
 #left .cat:hover{box-shadow:0 0 0 2px var(--hl)}
 #left .cat.new{background:transparent;border:2px dashed rgba(255,255,255,.7);color:#fff}
 #left .seg{background:var(--pop2);border:0;border-radius:999px}
-#left .seg button{color:rgba(255,255,255,.8);border-radius:999px}
-#left .seg button.on{background:#fff;color:var(--ink);box-shadow:none}
+#left .seg button{color:var(--ink);border-radius:999px}
+#left .seg button.on{background:#fff;color:#242424;box-shadow:none}
 .libtab{position:absolute;left:100%;top:50%;transform:translateY(-50%);width:12px;height:150px;border:0;border-radius:0 8px 8px 0;background:var(--strip);padding:0;cursor:pointer}
 .libtab:hover{filter:brightness(.92)}
 #right{position:absolute;right:16px;top:14px;width:340px;max-height:calc(100% - 28px);z-index:18;display:none;flex-direction:column;background:var(--bg);border:0;border-radius:18px;overflow:hidden;box-shadow:0 12px 34px rgba(0,0,0,.2)}
@@ -322,13 +327,13 @@ main.ai-open .insp{right:372px}
 .finding-item[aria-pressed="true"]{background:color-mix(in srgb,var(--hl) 22%,transparent)}
 .msg.me{background:var(--acc);color:var(--acc-ink)}
 .warn{border:0;border-radius:16px}
-.toast{background:var(--ink);color:var(--bg);border-radius:999px;padding:10px 20px}
+.toast{background:var(--ink);color:var(--bg);border-radius:20px;padding:10px 20px}
 /* всплывающие окна */
 .ov{background:rgba(20,20,20,.35)}
 .modal{background:var(--panel);border:0;border-radius:24px;box-shadow:0 14px 40px rgba(0,0,0,.25)}
 .modal .x{float:right;width:28px;height:28px;border:0;background:transparent;font-size:20px;line-height:1;color:var(--mute);border-radius:50%}
-#ovSet{align-items:flex-start;justify-content:flex-start;background:rgba(20,20,20,.18);padding:64px 14px}
-#ovSet .modal{width:min(340px,100%);background:var(--pop);color:#fff}
+#ovSet{align-items:flex-start;justify-content:flex-start;background:rgba(20,20,20,.18);padding:64px 14px 14px}
+#ovSet .modal{width:min(340px,100%);max-height:100%;background:var(--pop);color:#fff}
 #ovSet .modal h2{font-size:17px;text-align:center;margin-bottom:8px}
 #ovSet .modal .x{color:#fff;position:absolute;right:10px;top:8px}
 #ovSet .modal{position:relative}
@@ -346,7 +351,16 @@ main.ai-open .insp{right:372px}
   #left{width:min(272px,86vw)}
   #right{left:12px;right:12px;width:auto}
   main.ai-open .insp{right:16px}
+  body.plugin-editing .canvas-home{top:14px;bottom:auto}
   .insp{width:230px}
   .rb{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:480px){
+  .app>header{gap:4px;padding:8px 10px}
+  .app>header .btn{padding-inline:8px;font-size:13px}
+  .app>header .btn.ico{width:30px;padding-inline:0}
+  .app>header #wfName{width:auto;min-width:0;flex:1 0 44%;font-size:12px}
+  .app>header>.sp{display:none}
+  #ovSet{align-items:center;justify-content:center;padding:12px}
 }
 .tag:empty{display:none}

@@ -196,6 +196,7 @@ class NodeTransfer(BaseModel):
 class NodeResult(BaseModel):
     nodeId: Identifier
     label: str | None = None
+    portIndex: int | None = None
     type: NodeType | None = None
     status: NodeStatus = "queued"
     output: dict[str, JsonValue] | None = None
@@ -229,7 +230,7 @@ class RunReport(BaseModel):
             nodes=[
                 NodeResult(
                     nodeId=node.id, type=node.type, status="queued",
-                    label=node.config["title"] if node.type == "custom" else None,
+                    label=node.config.get("title") if node.type in ("custom", "plugin") else None,
                 )
                 for node in workflow.nodes
             ],

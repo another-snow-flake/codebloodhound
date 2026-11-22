@@ -77,6 +77,11 @@ def in_scope(path: PurePosixPath, scope: PurePosixPath | None) -> bool:
     return scope is None or path.is_relative_to(scope)
 
 
+def is_project_text(path: PurePosixPath, plugin_suffixes: frozenset[str]) -> bool:
+    suffix = path.suffix.lower()
+    return suffix in TEXT_SUFFIXES or suffix in plugin_suffixes or path.name.startswith(".env")
+
+
 def project_root(paths: list[PurePosixPath], finding_paths: list[PurePosixPath]) -> PurePosixPath:
     gradle_roots = {path.parent for path in paths if path.name in GRADLE_FILES}
     source_roots = {
@@ -124,10 +129,9 @@ def find_secrets(
     plugin_suffixes = LANGUAGE_SUFFIXES[language] if language else active_suffixes(plugins)
 
     def matches_file(path: PurePosixPath) -> bool:
-        suffix = path.suffix.lower()
         if language:
-            return suffix in plugin_suffixes
-        return suffix in TEXT_SUFFIXES or suffix in plugin_suffixes or path.name.startswith(".env")
+            return path.suffix.lower() in plugin_suffixes
+        return is_project_text(path, plugin_suffixes)
 
     findings = []
     for path, content in read_project_text(data, matches_file, scope):

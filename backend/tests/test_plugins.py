@@ -80,7 +80,7 @@ class PluginValidationTest(unittest.TestCase):
 
     def test_only_steps_belong_inside_and_every_node_is_connected(self):
         inner, inner_edges = BRANCHING
-        for extra in (node("t2", "trigger"), node("n", "notify", webhookRef="team"), plugin("nested", *BRANCHING)):
+        for extra in (node("t2", "trigger"), plugin("nested", *BRANCHING)):
             with self.subTest(kind=extra["type"]):
                 self.assert_rejected(plugin("p", inner + [extra], inner_edges))
         self.assert_rejected(plugin("p", inner + [node("loose", "secrets")], inner_edges))  # not connected
@@ -90,6 +90,25 @@ class PluginValidationTest(unittest.TestCase):
 
 
 class PluginRunTest(unittest.TestCase):
+    def test_plugin_input_can_supply_scanner_scope_and_flow(self):
+        inner = ports(1, 1) + [node("scan", "secrets")]
+        step = plugin("p", inner, [edge("i1", "scan", into="source"), edge("scan", "o1")], outputs=1)
+        unscoped, results = run(workflow([node("t", "trigger"), step], [edge("t", "p")]))
+        self.assertEqual(len(unscoped.findings), 1)
+        self.assertEqual(results["p/scan"].output["sourcePath"], ".")
+        scoped, results = run(workflow([node("t", "trigger"), node("scope", "source", path="src"), step],
+                                       [edge("t", "p"), edge("scope", "p", into="source")]))
+        self.assertEqual((scoped.status, scoped.findings), ("succeeded", []))
+        self.assertEqual(results["p/scan"].output["sourcePath"], "src")
+
+    def test_plugin_can_notify_after_a_scan(self):
+        inner = ports(1, 1) + [node("scan", "secrets"), node("send", "notify", webhookRef="team")]
+        step = plugin("p", inner, [edge("i1", "scan"), edge("scan", "send"), edge("send", "o1")], outputs=1)
+        with patch("backend.runner.send_webhook", return_value=204) as send:
+            report, _ = run(workflow([node("t", "trigger"), step], [edge("t", "p")]))
+        self.assertEqual(report.status, "succeeded")
+        self.assertEqual(send.call_args.args[0], "team")
+
     def test_plugin_runs_its_graph_and_only_the_active_output_continues(self):
         flow = workflow(
             [node("t", "trigger"), node("s", "secrets"), plugin("p", *BRANCHING),
@@ -105,6 +124,9 @@ class PluginRunTest(unittest.TestCase):
         self.assertEqual(results["yes"].output, {"passed": 2})  # secret + SQL injection reached output 1
         self.assertEqual(results["no"].status, "skipped")
         self.assertEqual(results["p"].status, "succeeded")
+        self.assertEqual(results["p"].label, "Ревью секретов")
+        self.assertEqual(results["p/i1"].portIndex, 1)
+        self.assertEqual(results["p/o2"].portIndex, 2)
         self.assertEqual(results["p"].output, {"innerNodes": 5, "findings": 1})
         self.assertEqual([transfer.port for transfer in results["p"].outputs], ["out1"])
         self.assertEqual(results["p"].inputs[0].findingCount, 1)
