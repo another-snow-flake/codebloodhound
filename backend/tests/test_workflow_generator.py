@@ -95,6 +95,52 @@ class WorkflowGeneratorTest(unittest.TestCase):
         draft.nodes[-1].config["webhookRef"] = "approved-receiver"
         plan_run(draft)
 
+    def test_unconditional_notification_is_retried_when_the_prompt_requires_a_condition(self):
+        self.model.complete.side_effect = [
+            json.dumps({"name": "Draft", "scanners": ["secrets"], "notification": "always"}),
+            json.dumps({
+                "name": "Draft", "scanners": ["secrets"], "notification": "match",
+                "condition": {"conditionMode": "severity", "minSeverity": "high"},
+            }),
+        ]
+        response = self.generate(description="Проверь секреты и отправь уведомление, если есть находки высокой критичности.")
+        self.assertEqual(response.status_code, 200, response.text)
+        draft = WorkflowDraft.model_validate(response.json()["draft"])
+        self.assertEqual([node.type for node in draft.nodes], ["trigger", "secrets", "condition", "notify"])
+        self.assertEqual(draft.edges[-1].sourceHandle, "true")
+        self.assertEqual(self.model.complete.call_count, 2)
+
+    def test_count_equality_keeps_notification_conditional(self):
+        self.model.complete.return_value = json.dumps({
+            "name": "Draft", "scanners": ["secrets"], "notification": "match",
+            "condition": {"conditionMode": "count", "comparison": "ge", "threshold": 3},
+        })
+        response = self.generate(description="Проверь секреты и отправь уведомление, если число находок равно 2.")
+        self.assertEqual(response.status_code, 200, response.text)
+        draft = WorkflowDraft.model_validate(response.json()["draft"])
+        self.assertEqual(draft.nodes[-2].config, {
+            "conditionMode": "count", "comparison": "eq", "threshold": 2, "countMinSeverity": "low",
+        })
+        self.assertEqual(draft.edges[-1].sourceHandle, "true")
+
+    def test_quoted_regex_and_negative_branch_preserve_the_description(self):
+        self.model.complete.return_value = json.dumps({
+            "name": "Draft", "scanners": ["secrets"], "notification": "match",
+            "condition": {"conditionMode": "regex", "field": "file", "pattern": "[.]txt$"},
+        })
+        response = self.generate(description=(
+            "Проверь секреты и отправь уведомление, если ни один путь не совпал с регулярным выражением `[.]yml$`."
+        ))
+        self.assertEqual(response.status_code, 200, response.text)
+        draft = WorkflowDraft.model_validate(response.json()["draft"])
+        self.assertEqual(draft.nodes[-2].config, {"conditionMode": "regex", "field": "file", "pattern": "[.]yml$"})
+        self.assertEqual(draft.edges[-1].sourceHandle, "false")
+
+    def test_unsupported_quoted_regex_is_rejected_before_calling_the_model(self):
+        response = self.generate(description="Проверь секреты по регулярному выражению `(?=secret)`.")
+        self.assertEqual((response.status_code, response.json()["code"]), (422, "invalid_condition_regex"))
+        self.model.complete.assert_not_called()
+
     def test_invalid_condition_is_retried_and_manual_draft_runs(self):
         self.model.complete.side_effect = [
             json.dumps({"name": "Draft", "scanners": ["secrets"],
@@ -108,6 +154,28 @@ class WorkflowGeneratorTest(unittest.TestCase):
         retry = self.model.complete.call_args.args[0][-1]["content"]
         self.assertIn("Ответ отклонён", retry)  # the model hears why, not a bare "fix it"
         self.assertNotEqual(retry.split(":", 1)[1].strip(), "")
+
+    def test_generation_without_model_preserves_quoted_regex_and_branch(self):
+        with patch.dict("os.environ", {"LLM_PROVIDER": "disabled"}):
+            response = self.generate(description=(
+                "Ищи секреты только в файле config/clients.json. "
+                "Отправь уведомление, если ни один путь не совпал с регулярным выражением `[.]yml$`."
+            ))
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertTrue(result["usedRules"])
+        draft = WorkflowDraft.model_validate(result["draft"])
+        self.assertEqual([node.type for node in draft.nodes], ["trigger", "secrets", "source", "condition", "notify"])
+        self.assertEqual(draft.nodes[-3].config["path"], "config/clients.json")
+        self.assertEqual(draft.nodes[-2].config["pattern"], "[.]yml$")
+        self.assertEqual(draft.edges[-1].sourceHandle, "false")
+        self.model.complete.assert_not_called()
+
+    def test_generation_without_model_rejects_unsupported_schedule(self):
+        with patch.dict("os.environ", {"LLM_PROVIDER": "disabled"}):
+            response = self.generate(description="Ищи секреты еженедельно.")
+        self.assertEqual((response.status_code, response.json()["code"]), (422, "unsupported_generation"))
+        self.model.complete.assert_not_called()
 
     def test_untrusted_model_cannot_supply_a_webhook_url(self):
         self.model.complete.return_value = json.dumps({
@@ -180,3 +248,12 @@ class WorkflowGeneratorTest(unittest.TestCase):
         self.assertEqual(len(scopes), 2)
         self.assertTrue(all(edge.source == source.id for edge in scopes))
         plan_run(draft)
+
+    def test_scope_uses_exact_requested_file_instead_of_model_prefix(self):
+        self.model.complete.return_value = json.dumps({
+            "name": "Draft", "scanners": ["secrets"], "scanPath": "src/example",
+        })
+        response = self.generate(description="Ищи секреты только в файле src/example.kt.")
+        self.assertEqual(response.status_code, 200, response.text)
+        source, = (node for node in response.json()["draft"]["nodes"] if node["type"] == "source")
+        self.assertEqual(source["config"], {"path": "src/example.kt"})

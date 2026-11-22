@@ -217,6 +217,7 @@ main.aic #right .ph h3,main.aic #right .ph .tag{display:none}
 }
 #ovGenerate .generate-prompt{height:112px}
 #generatePreview{margin-top:12px}
+#generateScope{overflow-wrap:anywhere}
 #generateWarnings:empty{display:none}
 #generateWarnings{padding-left:20px}
 #ovGenerate .generate-actions{flex-wrap:wrap}

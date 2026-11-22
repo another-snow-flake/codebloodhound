@@ -169,6 +169,7 @@ Configure an [HTTP webhook recipient](#webhook) before starting the API. In the 
 docker compose up -d --wait db
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
+$env:LLM_PROVIDER = 'disabled' # запуск без Qwen и внешнего API
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
 ```
 
@@ -177,6 +178,8 @@ python -m venv .venv
 ```powershell
 python -m http.server 5173 --bind 127.0.0.1 --directory frontend
 ```
+
+Откройте `http://127.0.0.1:5173`. Без подключённой модели кнопка генерации собирает черновики по локальным правилам для поддерживаемых запросов. Для точной регулярки возьмите выражение в обратные кавычки. С подключённой моделью генератор использует выбранного провайдера.
 
 ## Sample ZIP
 

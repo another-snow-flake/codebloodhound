@@ -31,7 +31,7 @@ from .sources import MAX_UPLOAD, validate_zip
 from .storage import Storage, database_url
 from .user_plugins import PluginDraft, UserPlugin
 from .webhooks import WebhookError, configured_webhooks
-from .workflow_generator import GenerationResult, WorkflowGenerationRequest, generate_workflow
+from .workflow_generator import GenerationResult, WorkflowGenerationRequest, generate_workflow, generate_workflow_without_model
 from .workflow_templates import PublicTemplate, PublishTemplate, TemplateSummary, make_public_draft
 
 
@@ -263,7 +263,12 @@ def create_app(dsn: str | None = None) -> FastAPI:
 
     @app.post("/workflows/generate", response_model_exclude_none=True)
     def generate_workflow_draft(request: WorkflowGenerationRequest) -> GenerationResult:
-        model = fixed_model(request)
+        try:
+            model = fixed_model(request)
+        except ApiProblem as error:
+            if error.code == "not_configured" and request.modelId is None:
+                return generate_workflow_without_model(request)
+            raise
         try:
             return generate_workflow(request, client_for(model))
         except LlmError as error:

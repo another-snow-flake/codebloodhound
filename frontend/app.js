@@ -706,7 +706,10 @@ $("#generateForm").onsubmit=async event=>{
     if(generation!==current||!$("#ovGenerate").classList.contains("open"))return;
     current.draft=result.draft;
     $("#generateName").textContent=result.draft.name;
-    $("#generateNodes").textContent=result.draft.nodes.map(nodeName).join(" · ");
+    const {flow,scope}=draftPreview(result.draft);
+    $("#generateNodes").textContent=flow;
+    $("#generateScope").hidden=!scope;
+    $("#generateScope code").textContent=scope;
     const warnings=$("#generateWarnings");
     warnings.replaceChildren();
     if(result.needsSource){
@@ -721,7 +724,7 @@ $("#generateForm").onsubmit=async event=>{
       warnings.append(item)
     }
     $("#generatePreview").hidden=false;$("#generateApply").hidden=false;
-    status.textContent="Черновик готов."
+    status.textContent=result.usedRules?"Черновик собран по локальным правилам. Модель не подключена.":"Черновик готов."
   }catch(error){
     if(generation!==current||!$("#ovGenerate").classList.contains("open"))return;
     if(error.code==="consent_required")$("#generateConsentRow").hidden=false;
@@ -1491,9 +1494,19 @@ function renderChat(scroll = false) {
   log.querySelectorAll("[data-draft]").forEach(b => b.onclick = () => openDraft(chatState.turns[+b.dataset.draft]));
   if (scroll) log.parentElement.scrollTop = log.parentElement.scrollHeight;
 }
+function draftPreview({nodes,edges}) {
+  const source=nodes.find(node=>node.type==="source");
+  const flow=nodes.filter(node=>node.type!=="source").map(node=>{
+    const branch=edges.find(edge=>edge.target===node.id)?.sourceHandle;
+    const label=branch==="true"?"«да»: ":branch==="false"?"«нет»: ":"";
+    return label+nodeName(node)
+  }).join(" → ");
+  return {flow,scope:source?.config?.path??""}
+}
 function draftMessage(turn, index) {
-  const nodes = turn.draft.nodes.map(nodeName).join(" → ");
-  return `<div class="msg"><b>Черновик: ${esc(turn.draft.name)}</b><br><small>${esc(nodes)}</small>
+  const {flow,scope}=draftPreview(turn.draft);
+  return `<div class="msg"><b>Черновик: ${esc(turn.draft.name)}</b><br><small>${esc(flow)}</small>
+    ${scope ? `<br><small>Область проверки: <code>${esc(scope)}</code></small>` : ""}
     ${turn.warnings.length ? `<ul style="margin:6px 0 0;padding-left:18px">${turn.warnings.map(w => `<li><small>${esc(w)}</small></li>`).join("")}</ul>` : ""}
     <br><button type="button" class="btn pri" data-draft="${index}" ${running||pluginEdit ? "disabled" : ""}>Открыть на холсте</button></div>`;
 }
@@ -1511,6 +1524,7 @@ async function openDraft(turn) {
 }
 function draftWarnings(result) {
   const warnings = [];
+  if(result.usedRules)warnings.push("Черновик собран по локальным правилам. Модель не подключена.");
   if (result.needsSource) {
     const trigger = result.draft.nodes.find(n => n.type === "trigger");
     warnings.push(`Запуск ежедневно в ${trigger.config.scheduleTime} (${trigger.config.scheduleTimezone}). Закрепите загруженный проект в ноде «Запуск».`);
