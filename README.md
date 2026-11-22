@@ -64,7 +64,7 @@
 
 У поиска секретов, SCA и SAST два входа. Основной вход подключайте к потоку сценария, а необязательный вход «Источник» — к ноде с относительным путём файла или папки внутри ZIP. Одну ноду «Источник» можно подключить к нескольким сканерам. Без связи на этом входе сканер проверяет весь архив. Если указанный путь отсутствует, нода источника покажет ошибку, а связанные сканеры пропустят запуск.
 
-Для загрузки по ссылке задайте перед запуском API `CYBER_GARDEN_REPOSITORIES` — список разрешённых публичных учебных репозиториев через запятую в формате `владелец/репозиторий`. В редакторе вставьте `https://github.com/владелец/репозиторий` и нажмите «Загрузить по ссылке». Загружается ZIP ветки по умолчанию, к нему применяются те же ограничения, что и к ручной загрузке. Для SCA по репозиторию без справочника задайте `CYBER_GARDEN_ADVISORIES` на сервере.
+В редакторе вставьте HTTPS-ссылку на публичный репозиторий GitHub и нажмите «Загрузить по ссылке». Ссылка на репозиторий загружает ZIP ветки по умолчанию, а ссылка вида `https://github.com/владелец/репозиторий/tree/main` загружает указанную ветку. Действуют те же ограничения, что и при ручной загрузке ZIP. Для SCA по репозиторию без справочника задайте `CYBER_GARDEN_ADVISORIES` на сервере.
 
 ### Ежедневный запуск
 
@@ -94,7 +94,7 @@
 
 ### Уведомления
 
-Настройте [получателя HTTP webhook](#webhook) перед запуском API. В редакторе добавьте «Уведомление», выберите получателя и подключите ноду к выходу «да» после условия. Например, отправляйте отчёт, только если есть высокие или критические находки. Получатель получит данные из активной ветки.
+Настройте [Telegram](#telegram) или [HTTP webhook](#webhook) перед запуском API. В редакторе добавьте «Уведомление», выберите получателя и подключите ноду к выходу «да» после условия. Например, отправляйте уведомление, только если есть высокие или критические находки.
 
 ## English
 
@@ -145,7 +145,7 @@ For a full scan, upload the organizers' training archive with `vulnerability-dat
 
 The demo proxy protects access. Signed-in users have private workflows and archives, while older and guest workflows remain shared. Secret detection and SAST always cover Kotlin, Python, JavaScript and TypeScript; there is no per-account language setting. An optional source input limits a scanner to a file or folder inside the ZIP. [Security audit](docs/security.md)
 
-To import by URL, configure `CYBER_GARDEN_REPOSITORIES` before starting the API with a comma-separated list of approved public training repositories in `owner/repo` format. Enter `https://github.com/owner/repo` in the editor. The default branch ZIP is subject to the same limits as a manual upload. Set `CYBER_GARDEN_ADVISORIES` for repositories without an SCA catalog.
+Enter the HTTPS URL of a public GitHub repository in the editor to import its default branch. A URL such as `https://github.com/owner/repo/tree/main` selects a branch. The archive is subject to the same limits as a manual upload. Set `CYBER_GARDEN_ADVISORIES` for repositories without an SCA catalog.
 
 For daily runs, upload an approved project, set the trigger to **Каждый день**, enter a local time and IANA time zone, bind the uploaded project and save the workflow. The API runs the pinned snapshot even with the editor closed. Change the trigger back to manual and save to disable future runs.
 
@@ -159,7 +159,7 @@ Ask a question in the right panel after a scan finishes. Chat uses up to 15 of t
 
 ### Notifications
 
-Configure an [HTTP webhook recipient](#webhook) before starting the API. In the editor, add **Уведомление** (Notification), select the recipient, and connect the node to the condition's **да** (Yes) output. For example, send the report only when there are high or critical findings. The recipient gets data from the active branch.
+Configure [Telegram](#telegram) or an [HTTP webhook recipient](#webhook) before starting the API. In the editor, add **Уведомление** (Notification), select the recipient, and connect the node to the condition's **да** (Yes) output. For example, send the notification only when there are high or critical findings.
 
 ## Launch
 
@@ -215,12 +215,45 @@ powershell -ExecutionPolicy Bypass -File tools\start_site.ps1 -Stop  # оста�
 
 Если у компьютера нет белого IP и доступа к роутеру, сайт можно открыть по своему домену через недорогой VPS. Посетитель приходит по HTTPS на VPS, Caddy там сам получает сертификат Let's Encrypt и передаёт запросы в SSH-туннель, который держит компьютер с сайтом.
 
+На новом Windows-компьютере клонируйте репозиторий, затем из его корня подготовьте Python:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+```
+
+Для чистой установки распакуйте двоичные файлы PostgreSQL 17 так, чтобы `initdb.exe` лежал в `%LOCALAPPDATA%\codebloodhound-site\pg17\pgsql\bin`. Выполните один раз, пока порт 5432 свободен:
+
+```powershell
+$siteDir = Join-Path $env:LOCALAPPDATA 'codebloodhound-site'
+$pgBin = Join-Path $siteDir 'pg17\pgsql\bin'
+$pgData = Join-Path $siteDir 'pgdata'
+$dbPasswordFile = Join-Path $siteDir 'db-password.txt'
+if (Test-Path $pgData) { throw 'pgdata уже существует. Для переноса используйте резервную копию PostgreSQL.' }
+[IO.File]::WriteAllText($dbPasswordFile, [Guid]::NewGuid().ToString('N'))
+icacls $dbPasswordFile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(R,W)"
+& "$pgBin\initdb.exe" -D $pgData -U cyber_garden -A scram-sha-256 --pwfile=$dbPasswordFile
+if ($LASTEXITCODE) { throw 'initdb завершился с ошибкой' }
+& "$pgBin\pg_ctl.exe" -D $pgData -l (Join-Path $siteDir 'postgres-init.log') -w start
+if ($LASTEXITCODE) { throw 'PostgreSQL не запустился' }
+$env:PGPASSWORD = [IO.File]::ReadAllText($dbPasswordFile)
+try {
+    & "$pgBin\createdb.exe" -h 127.0.0.1 -U cyber_garden cyber_garden
+    if ($LASTEXITCODE) { throw 'Не удалось создать базу cyber_garden' }
+} finally {
+    Remove-Item Env:PGPASSWORD
+    & "$pgBin\pg_ctl.exe" -D $pgData -w stop
+}
+```
+
+Для переноса аккаунтов, архивов и истории восстановите дамп старой базы PostgreSQL. Для AI-ответов на новом компьютере запустите Ollama и загрузите модель `ollama pull qwen3:8b`. Сканеры работают и без Ollama.
+
 1. В DNS домена направьте A-записи `@` и `www` на IP сервера.
 2. Скопируйте `tools/vps/setup_relay.sh` на VPS и выполните от root, передав домен и открытый ключ туннеля (`~\.ssh\codebloodhound_relay.pub`, создаётся `ssh-keygen -t ed25519 -f ~\.ssh\codebloodhound_relay`):
    ```sh
    sh setup_relay.sh example.org "ssh-ed25519 AAAA... codebloodhound-relay"
    ```
-   Скрипт ставит Caddy из официального репозитория, создаёт пользователя `tunnel` без shell, которому разрешён только один обратный порт `127.0.0.1:18080`, и открывает в ufw только 22, 80 и 443. Повторный запуск безопасен.
+   Скрипт рассчитан на отдельный Debian/Ubuntu VPS. Он ставит Caddy, записывает `/etc/caddy/Caddyfile`, настраивает пользователя `tunnel` для порта `127.0.0.1:18080` и открывает в ufw порты 22, 80 и 443. При переносе на новый Windows-компьютер остановите старый туннель и передайте открытый ключ нового компьютера. Скрипт заменит ключ пользователя `tunnel`.
 3. На компьютере с сайтом один раз запомните сервер, дальше `start_site.ps1` будет использовать его сам:
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools\start_site.ps1 -Relay tunnel@<IP VPS> -Domain example.org
@@ -300,6 +333,31 @@ $env:DATABASE_URL = 'postgresql://USER:PASSWORD@HOST:5432/DBNAME'
 ```
 
 Исходный файл SQLite открывается только для чтения. / The SQLite source file is opened read-only.
+
+## Telegram
+
+Укажите токен бота и ID чата в окружении FastAPI. Запустите или перезапустите сервер и выберите «Telegram» в ноде «Уведомление». Для личного чата сначала откройте переписку с ботом и нажмите Start. Для группы или канала дайте боту право отправлять сообщения.
+
+```powershell
+$env:CYBER_GARDEN_TELEGRAM_BOT_TOKEN = '<токен бота>'
+$env:CYBER_GARDEN_TELEGRAM_CHAT_ID = '<числовой ID чата>'
+```
+
+Создайте бота командой `/newbot` в [@BotFather](https://t.me/BotFather). Отправьте боту сообщение в личном чате или команду в группе. Для бота без входящего webhook вызовите `getUpdates` из той же консоли после настройки токена:
+
+```powershell
+$botApi = 'https://api.telegram.org/bot' + $env:CYBER_GARDEN_TELEGRAM_BOT_TOKEN
+(Invoke-RestMethod "$botApi/getUpdates").result | ForEach-Object {
+    if ($_.message) { $_.message.chat }
+    if ($_.channel_post) { $_.channel_post.chat }
+}
+```
+
+Возьмите поле `id` нужного чата, включая знак минус у группы. Для публичного канала можно указать `@имя_канала`. Запускайте `tools\start_site.ps1` из той же PowerShell, где заданы обе переменные, чтобы FastAPI их унаследовал.
+
+Бот отправляет ID запуска и число находок по уровням критичности для активной ветки. В браузер передаётся только имя получателя `telegram-bot`.
+
+Set the two variables in the FastAPI environment, restart the server, and select **Telegram** in the notification node. Start the bot in a private chat or grant it permission to post in the group or channel. The message contains the run ID and finding counts by severity from the active branch.
 
 ## Webhook
 

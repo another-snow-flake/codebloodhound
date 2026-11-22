@@ -7,7 +7,7 @@ from zipfile import ZipFile
 from backend.llm import LlmError
 from backend.runner import execute_plan, plan_run
 from backend.schemas import NodeResult, RunReport, WorkflowDraft
-from backend.webhooks import WebhookError, configured_webhooks
+from backend.webhooks import WebhookError, configured_webhooks, notification_refs, send_webhook
 
 
 class WorkflowWebhookTest(unittest.TestCase):
@@ -87,3 +87,48 @@ class WorkflowWebhookTest(unittest.TestCase):
             with self.assertRaises(WebhookError) as context:
                 configured_webhooks()
         self.assertEqual(context.exception.code, "invalid_webhook_settings")
+
+
+class TelegramDeliveryTest(unittest.TestCase):
+    def setUp(self):
+        config = patch.dict("os.environ", {
+            "CYBER_GARDEN_TELEGRAM_BOT_TOKEN": "123456:synthetic-token",
+            "CYBER_GARDEN_TELEGRAM_CHAT_ID": "-123456",
+            "CYBER_GARDEN_WEBHOOKS": '{"team":"https://example.invalid/report"}',
+        })
+        config.start()
+        self.addCleanup(config.stop)
+        self.payload = {
+            "runId": "test-run",
+            "findings": [{"severity": "high", "file": "private/path.kt"}],
+            "aiAnalyses": [{"summary": "private AI analysis"}],
+        }
+
+    def test_configured_recipient_sends_only_summary(self):
+        self.assertEqual(notification_refs(), ["team", "telegram-bot"])
+        with patch("backend.webhooks.build_opener") as opener:
+            response = opener.return_value.open.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b'{"ok":true}'
+            self.assertEqual(send_webhook("telegram-bot", self.payload), 200)
+            request = opener.return_value.open.call_args.args[0]
+            self.assertEqual(request.full_url, "https://api.telegram.org/bot123456:synthetic-token/sendMessage")
+            self.assertEqual(request.get_method(), "POST")
+            message = json.loads(request.data)
+            self.assertEqual(message["chat_id"], "-123456")
+            self.assertIn("test-run", message["text"])
+            self.assertIn("высокие: 1", message["text"])
+            self.assertNotIn("private", message["text"])
+
+    def test_telegram_must_confirm_delivery(self):
+        with patch("backend.webhooks.build_opener") as opener:
+            response = opener.return_value.open.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b'{"ok":false}'
+            with self.assertRaises(WebhookError) as problem:
+                send_webhook("telegram-bot", self.payload)
+        self.assertEqual(problem.exception.code, "telegram_rejected")
+
+    def test_missing_chat_keeps_other_recipients_available(self):
+        with patch.dict("os.environ", {"CYBER_GARDEN_TELEGRAM_CHAT_ID": ""}):
+            self.assertEqual(notification_refs(), ["team"])

@@ -1,4 +1,4 @@
-const T={trigger:{n:"Запуск",d:"Вручную или по расписанию",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Критичность, количество или регулярное выражение",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"HTTP webhook",c:"#5a8bb5"}};
+const T={trigger:{n:"Запуск",d:"Вручную или по расписанию",c:"#2f6b4f"},secrets:{n:"Поиск секретов",d:"Пароли и токены в файлах",c:"#b3261e"},sca:{n:"Анализ зависимостей",d:"SCA: известные CVE",c:"#d9622b"},sast:{n:"Статический анализ",d:"SAST: опасный код",c:"#7a5ac8"},condition:{n:"Условие",d:"Критичность, количество или регулярное выражение",c:"#c79a14"},ai:{n:"AI-рекомендации",d:"Объяснения и исправления",c:"#2d6cdf"},notify:{n:"Уведомление",d:"Telegram или HTTP webhook",c:"#5a8bb5"}};
 const SCANNERS=new Set(["secrets","sca","sast"]);
 T.source={n:"Источник",d:"Файл или папка внутри ZIP",c:"#16767c"};
 // плагин — отдельный граф; внутри него ноды «Вход k» и «Выход k» по числу портов ноды плагина
@@ -68,7 +68,8 @@ const WEBHOOK_ERRORS={
   invalid_webhook_settings:"Проверьте CYBER_GARDEN_WEBHOOKS на бэкенде.",
   webhook_not_configured:"Получатель удалён или не настроен на бэкенде.",
   webhook_timeout:"Получатель webhook не ответил вовремя.",
-  webhook_connection_error:"Не удалось подключиться к получателю webhook."
+  webhook_connection_error:"Не удалось подключиться к получателю.",
+  telegram_rejected:"Telegram не подтвердил доставку. Проверьте настройки бота и чата."
 };
 const ERR={upload_too_large:"ZIP больше 10 МиБ. Загрузите архив поменьше.",project_too_large:"В архиве слишком много файлов или он слишком большой после распаковки (лимит 2000 файлов и 40 МиБ).",invalid_zip:"Не удалось прочитать архив. Загрузите ZIP без пароля.",invalid_zip_entry:"В архиве есть недопустимые или повторяющиеся пути. Пересоберите ZIP без ссылок и «..».",empty_project:"В архиве нет файлов проекта.",invalid_workflow:"Сценарий не прошёл проверку: нужен один запуск без входов, связи только между существующими нодами, без циклов, и каждая нода достижима из запуска.",unsupported_trigger:"Выберите ручной или ежедневный запуск.",invalid_schedule:"Проверьте время и часовой пояс расписания, например Europe/Moscow.",schedule_source_required:"Загрузите проект и закрепите его в настройках запуска.",invalid_node_config:"Проверьте настройки ноды.",invalid_condition:"Проверьте режим, критичность и порог в настройках условия.",invalid_condition_regex:"Введите корректное регулярное выражение RE2 до 160 символов. Обратные ссылки и проверки вперёд или назад не поддерживаются.",source_not_found:"Бэкенд не нашёл загруженный проект. Загрузите архив заново.",workflow_not_found:"Сценарий не найден на бэкенде.",run_not_found:"Запуск не найден на бэкенде.",invalid_request:"Бэкенд отклонил запрос из-за неверного поля."};
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -278,13 +279,15 @@ function del(){if(!sel||running)return;
   if(sel.t==="n"&&["plugin_input","plugin_output"].includes(wf.nodes.find(n=>n.id===sel.id)?.type))return toast("Число входов и выходов меняется в «Настройках» плагина");
   if(sel.t==="n"){wf.nodes=wf.nodes.filter(n=>n.id!==sel.id);wf.edges=wf.edges.filter(e=>e.source!==sel.id&&e.target!==sel.id)}else wf.edges=wf.edges.filter(e=>e.id!==sel.id);sel=null;clearReport()}
 let webhookRefs=[],webhookListError="";
+const TELEGRAM_REF="telegram-bot";
 function webhookInspector(selected){
-  const refs=webhookRefs.map(ref=>`<option value="${esc(ref)}">${esc(ref)}</option>`).join("");
+  const refs=webhookRefs.map(ref=>`<option value="${esc(ref)}">${ref===TELEGRAM_REF?"Telegram":esc(ref)}</option>`).join("");
   const missing=selected&&!webhookRefs.includes(selected)
     ?`<option value="${esc(selected)}">${esc(selected)} (нет в списке)</option>`:"";
   const note=webhookListError||(!refs
-    ?"Добавьте получателя через CYBER_GARDEN_WEBHOOKS на бэкенде."
-    :"Получатель получит находки и AI-рекомендации с этой ветки в JSON.");
+    ?"Настройте бота и чат Telegram или webhook на бэкенде."
+    :selected===TELEGRAM_REF?"Бот отправит количество находок по уровням критичности."
+    :"Получатель webhook получит находки и AI-рекомендации с этой ветки в JSON.");
   return `<label class="f" for="webhookRef">Получатель</label>
     <select id="webhookRef" data-k="webhookRef"><option value="">Выберите получателя</option>${refs}${missing}</select>
     <p class="note">${esc(note)}</p>`;
@@ -370,7 +373,7 @@ function inspector(){document.querySelector(".insp")?.remove();if(!sel)return;
         n.config.scheduleTime??=TRIGGER_DEFAULTS.scheduleTime;
         n.config.scheduleTimezone??=TRIGGER_DEFAULTS.scheduleTimezone
       }
-      clearReport(key==="conditionMode"||key==="mode")
+      clearReport(key==="conditionMode"||key==="mode"||key==="webhookRef")
     }});
   const node=sel.t==="n"&&wf.nodes.find(x=>x.id===sel.id);
   if(node){const note=box.querySelector("#nodeNote");
@@ -428,7 +431,9 @@ function addNode(type,config){if(running)return toast("Дождитесь зав
   if(pluginEdit&&!PLUGIN_INNER.has(type))return toast("Внутри плагина можно использовать сканеры, источник, условие, AI-рекомендации и свои ноды");
   if(type==="trigger"&&wf.nodes.some(n=>n.type==="trigger"))return toast("В сценарии только один запуск");
   setNodeCatalog(false);
-  const n=mk(type,0,0,config),height=nodeHeight(n);
+  const nodeConfig=type==="notify"&&!config?.webhookRef&&webhookRefs.includes(TELEGRAM_REF)
+    ?{...config,webhookRef:TELEGRAM_REF}:config;
+  const n=mk(type,0,0,nodeConfig),height=nodeHeight(n);
   const view=visibleCanvas();
   const x=Math.round((view.left+view.right)/2-pan.x-95),y=Math.round(bd.clientHeight/2-pan.y-height/2);
   n.position={x,y};
@@ -640,11 +645,18 @@ async function canReplaceGraph(){
   }
   return choice==="discard"
 }
-async function save(){const current=wf;current.name=$("#wfName").value.trim()||"Без названия";
-  const snapshot=graphSnapshot(current);
-  const r=await api(current.id?"/workflows/"+current.id:"/workflows",{method:current.id?"PUT":"POST",headers:JH,body:JSON.stringify({name:current.name,nodes:current.nodes,edges:current.edges})});
+async function save({personalCopy=false}={}){const current=wf;current.name=$("#wfName").value.trim()||"Без названия";
+  // A personal run must not register a second schedule for a shared workflow.
+  const nodes=personalCopy?current.nodes.map(node=>{
+    if(node.type!=="trigger"||node.config.mode!=="daily")return node;
+    const {scheduleSourceId,scheduleSourceName,...config}=node.config;
+    return {...node,config:{...config,mode:"manual"}}
+  }):current.nodes;
+  const id=personalCopy?"":current.id;
+  const snapshot=graphSnapshot({...current,nodes});
+  const r=await api(id?"/workflows/"+id:"/workflows",{method:id?"PUT":"POST",headers:JH,body:JSON.stringify({name:current.name,nodes,edges:current.edges})});
   if(wf===current)savedGraph=snapshot;
-  current.id=r.id;current.languagePlugins=r.languagePlugins;return r}
+  current.id=r.id;current.nodes=nodes;current.languagePlugins=r.languagePlugins;return r}
 $("#fileBtn").onclick=e=>{e.stopPropagation();$("#fileMenu").classList.toggle("open")};
 addEventListener("click",()=>$("#fileMenu").classList.remove("open"));
 $("#fileMenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a;
@@ -747,10 +759,9 @@ $("#generateApply").onclick=async()=>{
   $("#ovGenerate").classList.remove("open")
 };
 // связь с бэкендом и настройки
-async function loadWebhookRefs(){
-  const origin=API;
+async function loadWebhookRefs(origin){
   let refs=[],error="";
-  try{refs=await api("/webhooks")}
+  try{refs=await api("/webhooks",{signal:AbortSignal.timeout(8000)},origin)}
   catch(e){error=WEBHOOK_ERRORS[e.code]||"Не удалось загрузить список получателей."}
   if(origin!==API)return;
   webhookRefs=Array.isArray(refs)?refs:[];
@@ -761,7 +772,18 @@ async function checkBackend(origin){
   const response=await api("/health",{signal:AbortSignal.timeout(8000)},origin);
   if(response?.status!=="ok")throw {message:"Адрес не вернул корректный статус API."}
 }
-async function ping(){const t=$("#apiTag"),origin=API;try{await checkBackend(origin);if(API!==origin)return false;t.textContent="бэкенд на связи";t.classList.add("ok");loadWebhookRefs();return true}catch(e){if(API!==origin)return false;t.textContent="нет связи с бэкендом";t.classList.remove("ok");webhookRefs=[];webhookListError="Нет связи с бэкендом.";inspector();return false}}
+async function ping(){
+  const origin=API;
+  try{await checkBackend(origin)}
+  catch(e){
+    if(API===origin){
+      webhookRefs=[];webhookListError="Нет связи с бэкендом.";inspector()
+    }
+    return false
+  }
+  if(API!==origin)return false;
+  loadWebhookRefs(origin);return true
+}
 // выбор модели: у каждой вкладки свой (sessionStorage), модель уходит с каждым запуском и вопросом в чате
 let llmSettings=null;
 const PROVIDERS={local:"локальная",deepseek:"DeepSeek API"};
@@ -1166,7 +1188,7 @@ $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/
       if(!(await canReplaceGraph()))return;
       if(API!==origin||running||sourceLoading||accountPending)return;
       webhookRefs=[];webhookListError="Загрузка получателей…";API=next;account=null;resetWorkspace();showAccount();refreshLibrary();ls.set("cg_api",API);ss.set("cg_model",null);ss.set("cg_model_consent",null);
-      if(await ping()){loadLlm();restoreAccount();toast("Бэкенд на связи. Проверьте модель для нового адреса.")}
+      loadWebhookRefs(next);loadLlm();restoreAccount();toast("Адрес API сохранён. Проверьте модель для нового адреса.");
     }catch(error){fail(error)}
     finally{button.disabled=false}
     return
@@ -1181,15 +1203,14 @@ $("#setSave").onclick=async()=>{const next=$("#apiUrl").value.trim().replace(/\/
     ss.set("cg_model",id);if(needsConsent)ss.set("cg_model_consent",id);
     renderAI();$("#ovSet").classList.remove("open");
     return toast(`Модель в этой вкладке: ${modelLabel(id)}. Ответ за ${r.seconds} с.`)}
-  $("#ovSet").classList.remove("open");toast(await ping()?"Бэкенд на связи":"Нет связи с бэкендом по адресу "+API)};
+  $("#ovSet").classList.remove("open");toast(await ping()?"Подключение проверено":"Нет связи с бэкендом по адресу "+API)};
 $("#theme").onclick=()=>{const d=document.documentElement,dark=d.dataset.theme?d.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;d.dataset.theme=dark?"light":"dark"};
 $("#aiToggle").onclick=()=>$("#main").classList.remove("ai-open");
 // источник
 let sourceLoading=false;
 const REPO_ERRORS={
-  invalid_repository_url:"Укажите HTTPS-ссылку на репозиторий GitHub в формате github.com/владелец/репозиторий.",
-  repository_not_allowed:"Репозиторий не входит в список разрешённых учебных проектов.",
-  repository_unavailable:"Репозиторий недоступен. Нужен публичный репозиторий с веткой по умолчанию.",
+  invalid_repository_url:"Укажите HTTPS-ссылку на репозиторий GitHub или его ветку.",
+  repository_unavailable:"GitHub не нашёл публичный репозиторий или указанную ветку.",
   repository_timeout:"GitHub не успел отдать архив. Попробуйте ещё раз.",
   repository_download_failed:"Не удалось получить ZIP-архив от GitHub."
 };
@@ -1202,6 +1223,8 @@ async function loadSource(path,options,label){
   try{
     const result=await api(path,{method:"POST",...options});
     if(!sameWorkspace())return;
+    if(typeof result?.sourceId!=="string"||!result.sourceId)
+      throw {message:"API не подтвердил загрузку проекта."};
     sourceId=result.sourceId;sourceName=label;tag.textContent="загружен: "+label;
     tag.classList.add("ok");$("#src").classList.remove("need");clearReport()
   }catch(e){if(sameWorkspace()){tag.textContent=previous;toast(REPO_ERRORS[e.code]||e.message)}}
@@ -1218,7 +1241,7 @@ $("#fileIn").onchange=()=>{
 };
 $("#repoBtn").onclick=()=>{
   const url=$("#repoUrl").value.trim();
-  if(!url){$("#repoUrl").focus();return toast("Введите ссылку на учебный репозиторий")}
+  if(!url){$("#repoUrl").focus();return toast("Введите ссылку на репозиторий GitHub")}
   loadSource("/sources/repository",{headers:JH,body:JSON.stringify({url})},url.replace(/^https:\/\/github\.com\//i,""))
 };
 $("#repoUrl").onkeydown=e=>{if(e.key==="Enter")$("#repoBtn").click()};
@@ -1235,7 +1258,7 @@ async function pollRun(runId){
     await wait(failures?800*2**failures:800);
     try{
       const next=await api("/runs/"+encodeURIComponent(runId));
-      if(next?.runId!==runId||!["queued","running","succeeded","failed"].includes(next.status))
+      if(next?.runId!==runId||!Array.isArray(next.nodes)||!["queued","running","succeeded","failed"].includes(next.status))
         throw {code:"invalid_run_status",message:"API вернул некорректный статус проверки."};
       report=next;
       failures=0;
@@ -1254,7 +1277,8 @@ function validate(){const tr=wf.nodes.filter(n=>n.type==="trigger");if(tr.length
   const openPlugin=wf.nodes.find(n=>n.type==="plugin"&&Array.from({length:+n.config.inputs||1},(_,i)=>inHandle(n,i+1)).some(h=>!wf.edges.some(e=>e.target===n.id&&(e.targetHandle??null)===h)));
   if(openPlugin)return `Подключите все входы плагина «${nodeName(openPlugin)}».`;
   const bad=wf.nodes.filter(n=>!SUPPORTED.has(n.type));if(bad.length)return`Нода «${esc(nodeName(bad[0]))}» пока не выполняется бэкендом. Уберите её, чтобы запустить сценарий.`;
-  if(wf.nodes.some(n=>n.type==="notify"&&!n.config.webhookRef))return WEBHOOK_ERRORS.invalid_webhook_ref;
+  if(wf.nodes.some(n=>n.type==="notify"&&!n.config.webhookRef))
+    return webhookListError||(!webhookRefs.length?"Настройте получателя Telegram или webhook на бэкенде.":WEBHOOK_ERRORS.invalid_webhook_ref);
   return null}
 $("#runBtn").onclick=async()=>{if(running)return;
   if(pluginEdit)return toast("Это редактор плагина. Сохраните плагин, добавьте его на холст сценария и запустите сценарий.");
@@ -1264,13 +1288,15 @@ $("#runBtn").onclick=async()=>{if(running)return;
   if(!resume){
     const err=validate();if(err)return toast(err);
     if(sourceLoading)return toast("Дождитесь загрузки проекта");
-    if(!runSource){$("#src").classList.add("need");return toast("Загрузите учебный ZIP или репозиторий по ссылке")}
+    if(!runSource){$("#src").classList.add("need");return toast("Загрузите ZIP или репозиторий по ссылке")}
   }
   running=true;refreshRunButton();pick=null;inspector();renderChat();
   try{
     if(!resume){
-      await save();
+      const personalCopy=Boolean(sourceId&&account&&wf.id&&!Array.isArray(wf.languagePlugins));
+      await save({personalCopy});
       const r=await api(`/workflows/${wf.id}/runs`,{method:"POST",headers:JH,body:JSON.stringify({sourceId:runSource,...modelChoice()})});
+      if(personalCopy)toast("Проверка запущена в личной копии сценария.");
       historicalReport=false;report={runId:r.runId,workflowId:wf.id,status:r.status,nodes:wf.nodes.map(n=>({nodeId:n.id,status:"queued"})),findings:[]};
     }
     openRep();render();renderRep();renderAI();
@@ -1351,7 +1377,7 @@ function nodeNote(n,s){const o=s.output;
   if(n.type==="trigger"&&o?.sourceId)return "<br><small>Проверяется загруженный проект</small>";
   if(n.type==="source"&&o?.sourcePath)return `<br><small>${esc(o.sourcePath)}</small>`;
   if(n.type==="notify"&&o){
-    if(o.delivered)return `<br><small>Отправлено (HTTP ${esc(o.statusCode)})</small>`;
+    if(o.delivered)return `<br><small>${n.config.webhookRef===TELEGRAM_REF?"Отправлено в Telegram":`Отправлено (HTTP ${esc(o.statusCode)})`}</small>`;
     const reason=WEBHOOK_ERRORS[o.errorCode]||(o.statusCode?`Получатель вернул HTTP ${o.statusCode}.`:s.error);
     return `<br><small style="color:var(--bad)">${esc(reason)}</small>`
   }

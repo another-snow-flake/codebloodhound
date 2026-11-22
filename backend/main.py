@@ -30,7 +30,7 @@ from .schemas import (
 from .sources import MAX_UPLOAD, validate_zip
 from .storage import Storage, database_url
 from .user_plugins import PluginDraft, UserPlugin
-from .webhooks import WebhookError, configured_webhooks
+from .webhooks import WebhookError, notification_refs
 from .workflow_generator import GenerationResult, WorkflowGenerationRequest, generate_workflow, generate_workflow_without_model
 from .workflow_templates import PublicTemplate, PublishTemplate, TemplateSummary, make_public_draft
 
@@ -167,13 +167,13 @@ def create_app(dsn: str | None = None) -> FastAPI:
     @app.get("/webhooks")
     def list_webhooks() -> list[str]:
         try:
-            return sorted(configured_webhooks())
+            return notification_refs()
         except WebhookError as error:
             raise ApiProblem(503, error.code, str(error)) from None
 
     @app.post("/sources", status_code=201)
     def upload_source(
-        file: Annotated[UploadFile, File(description="ZIP archive of an approved training project")], account: OptionalAccount,
+        file: Annotated[UploadFile, File(description="Project ZIP archive")], account: OptionalAccount,
     ) -> SourceCreated:
         archive = file.file.read(MAX_UPLOAD + 1)
         if len(archive) > MAX_UPLOAD:
